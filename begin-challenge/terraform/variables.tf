@@ -51,9 +51,13 @@ variable "aoai_model_version" {
 }
 
 variable "aoai_deployment_name" {
-  description = "Model deployment name (must differ from the model name, otherwise C4 has no fault)."
+  description = "Model deployment name for the C4 store assistant (anything except store-assistant-gpt41, the stale name C4 starts with)."
   type        = string
   default     = "store-assistant"
+  validation {
+    condition     = var.aoai_deployment_name != "store-assistant-gpt41"
+    error_message = "store-assistant-gpt41 is the stale deployment name challenge C4 starts with; choose another name."
+  }
 }
 
 variable "aoai_capacity" {

@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Round** | Proposed core, round 4 (pilot gate) · Intermediate |
+| **Round** | Proposed core, round 4 · Intermediate |
 | **Namespace** | `c4-assistant` |
 | **Investigation time (design target)** | 20–25 minutes |
 | **Azure services** | Microsoft Foundry (Azure OpenAI) account with a `GlobalStandard` model deployment, a user-assigned managed identity with workload identity federation |
@@ -53,22 +53,26 @@ All pods are Ready because `/health` doesn't call the model. Trigger a real requ
 
 <details><summary>Hint 2 – Inspect the failed dependency call</summary>
 
-`kubectl logs -n c4-assistant deploy/ai-service` – what did Azure OpenAI answer, and which endpoint and
-deployment did the service call?
+`kubectl logs -n c4-assistant deploy/ai-service` – what did Azure OpenAI answer? Then check which endpoint and
+deployment the service is configured to call: `kubectl exec -n c4-assistant deploy/ai-service -- printenv | grep AZURE_OPENAI`.
 </details>
 
-<details><summary>Hint 3 – Compare the configured deployment name with the actual deployment</summary>
+<details><summary>Hint 3 – Compare the configured deployment name with the actual deployments</summary>
 
 Where does `ai-service` get `AZURE_OPENAI_DEPLOYMENT_NAME`? Compare it with the deployments that exist in the
 Foundry account: `az cognitiveservices account deployment list -g <resource-group> -n <account> -o table`
-(or the Microsoft Foundry portal). A *model* name is not a *deployment* name.
+(or the Microsoft Foundry portal). Model upgrades usually come with a *new deployment* – check the change
+ticket on the ConfigMap.
 </details>
 
 ## What doesn't count
 
 * Switching `ai-service` to API keys (`USE_AZURE_AD=False`, adding `AZURE_OPENAI_API_KEY`), re-enabling key
   auth on the account, or granting broader Azure roles.
-* Creating a new model deployment named after the wrong value, or returning a canned description.
+* Pointing `ai-service` at a bare model name such as `gpt-6-luna`: Foundry accounts answer those too, but that
+  bypasses the provisioned deployment (its capacity, quota and policies) – use the deployment the platform team
+  created.
+* Re-creating a deployment with the old name, or returning a canned description.
 
 ## Stretch objective
 
@@ -88,9 +92,9 @@ begin-challenge/azure-cli-bash/deploy.sh -c c4
 
 | Aspect | Assessment |
 |---|---|
-| **Technical feasibility** | **Medium–high.** `ai-service` (aks-store-demo 2.2.0) only checks environment variables in `/health`, so the pod stays healthy; with `AZURE_OPENAI_DEPLOYMENT_NAME` set to the **model name** (`gpt-6-luna`) instead of the **deployment name** (`store-assistant`) every generation call fails with Azure OpenAI's `DeploymentNotFound` (404) and `ai-service` returns HTTP 500 with that text. Identity, network, model availability and quota stay healthy, so there is a single fault. `ai-service` sends only `temperature=1` (no `max_tokens`), which is compatible with GPT-5/6 reasoning models. |
-| **Validation status** | Manifests validated; deployment code creates the account (keys disabled), the `gpt-6-luna` 2026-09-22 GlobalStandard deployment, the identity, role and federated credential. **Pending Azure pilot:** an end-to-end call with `gpt-6-luna` using ai-service's default API version `2024-12-01-preview`; role-assignment propagation time on a fresh deployment; the exact error text participants see. |
-| **Fit for 200-level users** | Good. The evidence is explicit (`DeploymentNotFound` in the logs) and "model name ≠ deployment name" is one of the most common real-world Azure OpenAI mistakes. Participants need **Reader** access to the Foundry account (or the portal) to list deployments. |
+| **Technical feasibility** | **High – validated on Azure (2026-10-14).** `ai-service` (aks-store-demo 2.2.0) only checks environment variables in `/health`, so the pod stays healthy; with `AZURE_OPENAI_DEPLOYMENT_NAME` still set to the retired deployment `store-assistant-gpt41` (the platform replaced it with `store-assistant`, model `gpt-6-luna` 2026-09-22) every generation call fails with Azure OpenAI's `DeploymentNotFound` (404) and `ai-service` returns an error. Identity, network, model availability and quota stay healthy, so there is a single fault. `ai-service` sends only `temperature=1` (no `max_tokens`), which works with GPT-5/6 reasoning models; the default API version `2024-12-01-preview` works end to end. **Design change from the pilot:** the original fault (the *model* name instead of the deployment name) does not reproduce – Foundry (`AIServices`) accounts now answer requests addressed to a bare model name, even for models that aren't deployed (`gpt-6-sol`, `gpt-5-mini` returned 200). Only names that are neither a deployment nor a model return 404. |
+| **Validation status** | Validated on AKS Automatic 1.35 (westus3) with PowerShell, bash and Terraform deployments: begin state fails with `DeploymentNotFound`, the documented fix passes, end state passes. Workload identity + `Cognitive Services OpenAI User` worked immediately after deployment (no propagation retries needed). |
+| **Fit for 200-level users** | Good. The evidence is explicit (`DeploymentNotFound` in the logs) and "the app still points at a renamed/retired deployment" is one of the most common real-world Azure OpenAI incidents. Participants need **Reader** access to the Foundry account (or the portal) to list deployments. |
 | **Expected time** | 10–20 min. |
-| **Risks** | Per-subscription model availability and quota (the test subscription has 10M TPM gpt-6-luna GlobalStandard quota; Skillable subscriptions must be checked); the model must exist in the chosen `AOAI_LOCATION`. AI features attract audiences – a strong reason to keep it. |
-| **Opinion** | **Keep as round 4 once the pilot confirms an end-to-end call.** If model access per subscription is a problem, swap in **A4** (identity) as the doc suggests – it reuses the same workload identity concepts without a model dependency. |
+| **Risks** | Per-subscription model availability and quota (the test subscription has 10M TPM gpt-6-luna GlobalStandard quota; Skillable subscriptions must be checked); the model must exist in the chosen `AOAI_LOCATION`. Model-name routing means a participant can "fix" it with `gpt-6-luna` – the scoring rejects that (it checks the provisioned deployment name). AI features attract audiences – a strong reason to keep it. |
+| **Opinion** | **Keep as round 4.** If model access per subscription is a problem, swap in **A4** (identity) as the doc suggests – it reuses the same workload identity concepts without a model dependency. |

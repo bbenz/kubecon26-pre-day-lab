@@ -58,6 +58,9 @@ function Test-ChallengeA2 {
     else { Fail 'workload and load test unchanged' }
     Check 'checkout-api rollout complete, all replicas ready' { Test-Rollout $ns 'checkout-api' }
     $out = kj exec -n $ns deployment/loadgen '--' python3 /app/loadtest.py
+    # Empty output means kubectl exec itself failed (for example a dropped API
+    # connection), not the test: run it once more and keep errors for the report.
+    if (-not $out) { $out = ((& kubectl --context $script:Kctx exec -n $ns deployment/loadgen '--' python3 /app/loadtest.py 2>&1) | Out-String).Trim() }
     if ($out -match '"result": "PASS"') { Pass 'fixed load test meets the objective' } else { Fail 'fixed load test meets the objective' }
     Detail (($out -split "`r?`n") | Select-Object -Last 1)
 }

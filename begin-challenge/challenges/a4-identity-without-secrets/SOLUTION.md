@@ -1,15 +1,16 @@
 # A4 · Walkthrough to the end state (facilitators)
 
-> Spoilers. Paste the exact AADSTS message captured during the Azure pilot into step 1.
+> Spoilers. Messages below were captured on AKS Automatic 1.35 (westus3) on 2026-10-14.
 
 ## 1. Read the failure
 
 ```bash
 kubectl logs -n a4-config deploy/config-reader --tail=2
-# FAILED at stage 'token-exchange': invalid_request: AADSTS700213: No matching federated identity record found
-#   for presented assertion subject 'system:serviceaccount:a4-config:config-reader'. Check your federated identity
-#   credential Subject, Audience and Issuer against the presented assertion. ...
+# [06:47:55] FAILED at stage 'token-exchange': invalid_client: AADSTS700213: No matching federated identity record
+#   found for presented assertion subject 'system:serviceaccount:a4-config:config-reader'. Check your federated
+#   identity credential Subject, Audience and Issuer against the presented assertion. https://learn.microsoft.com/entra/workload-id/workload-identity-federation
 kubectl get --raw /api/v1/namespaces/a4-config/services/config-reader:http/proxy/status
+#   {"app": "config-reader", "ok": false, "stage": "token-exchange", "detail": "invalid_client: AADSTS700213: ...", ...}
 ```
 
 The failure is in the **token exchange** (Entra), before Key Vault is even called.

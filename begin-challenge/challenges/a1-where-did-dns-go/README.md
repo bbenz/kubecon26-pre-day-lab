@@ -66,8 +66,17 @@ from a pod is allowed only if *some* policy selecting it allows that destination
 <details><summary>Hint 3 – Compare DNS traffic and destinations with the allow rules</summary>
 
 Where does the pod actually send DNS queries? `kubectl exec ... -- cat /etc/resolv.conf`. DNS uses port 53 over
-**UDP and TCP**. On AKS Automatic, LocalDNS answers on a node-local address; elsewhere CoreDNS (`k8s-app=kube-dns`
-in `kube-system`) does.
+**UDP and TCP**. On AKS Automatic the answer is **LocalDNS**, a DNS cache on every node (`169.254.10.11`) – not
+the CoreDNS pods.
+</details>
+
+<details><summary>Hint 4 – When the "textbook" DNS rule doesn't work</summary>
+
+With Azure CNI powered by Cilium, traffic to the node-local LocalDNS listener counts as traffic to the node
+itself (the Cilium `host` entity). A Kubernetes NetworkPolicy can't select the node: rules that allow 53 to the
+`k8s-app=kube-dns` pods or to `ipBlock` `169.254.10.x` don't match. Either allow port 53 without restricting the
+destination, or use a `CiliumNetworkPolicy` with `toEntities: [host]`
+([AKS docs](https://learn.microsoft.com/azure/aks/azure-cni-powered-by-cilium#is-aks-local-dns-supported-with-azure-cni-powered-by-cilium)).
 </details>
 
 ## What doesn't count
@@ -94,9 +103,9 @@ begin-challenge/azure-cli-bash/deploy.sh -c a1
 
 | Aspect | Assessment |
 |---|---|
-| **Technical feasibility** | **Medium – depends on the Azure pilot.** On a standard cluster (validated locally with an enforcing CNI) the fault and fix are deterministic: default-deny egress + an allow rule for the catalog only → `Temporary failure in name resolution`; adding UDP/TCP 53 to the DNS path fixes it while `ledger-api` and the internet stay blocked. **AKS Automatic enables LocalDNS by default** (pods resolve through a node-local listener, 169.254.10.10/11). With Cilium that destination may be treated as the *host*, which Kubernetes `ipBlock` rules may not match. Whether the seeded policy blocks DNS, and which allow rule fixes it, must be confirmed on AKS Automatic. The end-state policy allows 53 to both the LocalDNS addresses and the kube-dns pods. |
-| **Validation status** | Fault, fix and scoring validated locally with bash, PowerShell and Terraform. **Pending Azure pilot (critical):** DNS path under LocalDNS + Cilium. If `ipBlock` does not match, switch the expected fix to a port-only DNS rule or a `CiliumNetworkPolicy` (`toEntities: [host]` / `toFQDNs` needs ACNS). |
-| **Fit for 200-level users** | Medium. The symptom is clear and "DNS vs connectivity" is a valuable skill, but writing NetworkPolicy YAML correctly (selectors, UDP *and* TCP, namespaceSelector + podSelector in one peer) is error-prone, and LocalDNS is unfamiliar even to experienced users. |
-| **Expected time** | 20–30 min; risk of overrun if the LocalDNS nuance bites. |
-| **Risks** | Platform-specific DNS behaviour (above). Inspektor Gadget needs privileged pods: AKS Automatic's baseline Pod Security would require a namespace exclusion – keep it optional. |
-| **Opinion** | **Strong alternate only if the pilot shows deterministic behaviour with a simple, explainable fix.** Otherwise prefer A2 or A5 as the alternate. |
+| **Technical feasibility** | **Medium-high – validated on Azure (2026-10-14).** The fault is deterministic: default-deny egress + an allow rule for the catalog only → `Temporary failure in name resolution`. **AKS Automatic twist:** pods resolve through LocalDNS (node-local `169.254.10.11`), and Cilium treats that traffic as the `host` entity, so the *textbook* fixes – allow 53 to the `kube-dns` pods, or `ipBlock` 169.254.10.x – **do not work** (verified). Working fixes (both verified): a port-only NetworkPolicy rule (UDP/TCP 53, no destination – the end state) or a `CiliumNetworkPolicy` with `toEntities: [host]` (least privilege). `ledger-api` and the internet stay blocked with either. |
+| **Validation status** | Fault, fix and scoring validated locally (bash, PowerShell, Terraform) and on AKS Automatic 1.35 in westus3: begin state fails as designed; both fixes pass. |
+| **Fit for 200-level users** | **Medium-low without hint 4, medium with it.** "DNS vs connectivity" is a valuable skill, but on AKS Automatic the first fix most people know fails silently, and the reason (LocalDNS + Cilium `host` entity) is advanced. Hint 4 turns it into a solvable – and memorable – platform lesson. |
+| **Expected time** | 20–30 min with hints 1–4 (25+ min if participants try `ipBlock`/kube-dns variations first). |
+| **Risks** | Participants burning the round on the textbook rule; facilitators should release hint 4 at ~10 minutes. Inspektor Gadget needs privileged pods: AKS Automatic's baseline Pod Security would require a namespace exclusion – keep it optional. |
+| **Opinion** | **Alternate for an advanced round, or with hint 4 released early.** Excellent debrief material (LocalDNS, Cilium entities, DNS as an exfiltration path), but A2 or A5 are smoother substitutes for a 200-level core round. |

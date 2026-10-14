@@ -46,6 +46,7 @@ spec:
         app: order-service
         kubecon.lab/challenge: c1
       annotations:
+        kubectl.kubernetes.io/default-container: order-service
         kubecon.lab/config-revision: "CHG-1109-fix"
     spec:
       nodeSelector:

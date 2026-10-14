@@ -37,22 +37,16 @@ spec:
       ports:
         - protocol: TCP
           port: 8080
-    # FIXED: allow DNS, but only to the cluster's DNS path.
-    #  - AKS Automatic uses LocalDNS: pods send queries to the node-local
-    #    listener (169.254.10.10 / 169.254.10.11, see /etc/resolv.conf).
-    #  - Clusters without LocalDNS send queries to the CoreDNS (kube-dns) pods.
-    - to:
-        - ipBlock:
-            cidr: 169.254.10.10/32
-        - ipBlock:
-            cidr: 169.254.10.11/32
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: kube-system
-          podSelector:
-            matchLabels:
-              k8s-app: kube-dns
-      ports:
+    # FIXED: allow DNS (UDP and TCP 53).
+    #  - AKS Automatic uses LocalDNS: pods send queries to a node-local listener
+    #    (169.254.10.11, see /etc/resolv.conf), not to the CoreDNS pods.
+    #  - With Azure CNI powered by Cilium (>= 1.17) that traffic counts as traffic
+    #    to the node ("host" entity), which a Kubernetes NetworkPolicy cannot
+    #    select: ipBlock 169.254.10.x and kube-dns pod selectors do not match it.
+    #  - So the rule names the DNS ports without a destination. Everything else
+    #    stays blocked (ledger-api, the internet). For DNS to the node only, use a
+    #    CiliumNetworkPolicy with toEntities: [host] instead (see SOLUTION.md).
+    - ports:
         - protocol: UDP
           port: 53
         - protocol: TCP

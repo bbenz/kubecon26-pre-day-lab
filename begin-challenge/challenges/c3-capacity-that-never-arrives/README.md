@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Round** | Proposed core, round 3 (pilot gate) · Intermediate–advanced |
+| **Round** | Proposed core, round 3 (recommended as an advanced bonus) · Intermediate–advanced |
 | **Namespace** | `c3-processing` (plus the cluster-scoped NodePool `c3-processing`) |
 | **Investigation time (design target)** | 20–25 minutes, including 1–5 minutes of node provisioning after the fix |
 | **Azure services** | AKS Automatic node auto-provisioning (NAP, Karpenter-based) |
@@ -51,7 +51,9 @@ scoring/verify.sh --challenges c3          # bash
 <details><summary>Hint 1 – Follow the Pending pod's scheduling evidence</summary>
 
 `kubectl describe pod -n c3-processing -l app=order-batch` – read **all** the Events, including those from
-the node auto-provisioner (Karpenter), not just the default scheduler's.
+the node auto-provisioner (Karpenter), not just the default scheduler's. Karpenter explains why the pools it
+*considered* don't fit – a pool that can't offer any instance type isn't mentioned at all, so don't take its
+"typo of ..." suggestion at face value.
 </details>
 
 <details><summary>Hint 2 – Identify the pools eligible for this workload</summary>
@@ -93,9 +95,9 @@ run, so retained nodes cannot mask the fault.
 
 | Aspect | Assessment |
 |---|---|
-| **Technical feasibility** | **Medium.** Custom NAP NodePools (`karpenter.sh/v1`, `AKSNodeClass` `default`) are supported on AKS Automatic. The seeded fault is self-contradictory *inside* the pool (`kubernetes.io/arch In [amd64]` + an approved SKU list of Arm64 `Dps/Dpds v6` sizes), which per the Karpenter source produces a `NoCompatibleInstanceTypes` event on the NodePool while the pool still reports `READY=True`. Deterministic, never auto-fixed. |
-| **Validation status** | Manifests schema-validated. **Pending Azure pilot (pilot gate in the design doc):** exact pod/NodePool event wording, node provisioning latency after the fix (AKS Automatic's pod-readiness SLA is 5 minutes), and behaviour with retained nodes on replay. Regional SKU restrictions matter: the test subscription cannot use v5/v6 x64 sizes in eastus2 (default region is westus3); the end-state SKU list spans v5/v6/v7 so NAP can always find capacity. |
-| **Fit for 200-level users** | **Stretch.** Requires NodePool/Karpenter concepts (requirements, taints vs tolerations, nodeSelector) and Azure VM naming knowledge (`p` = Arm64). The evidence is spread across scheduler events, Karpenter events and the NodePool object. Hints are essential. |
-| **Expected time** | 20–30 min (investigation 15–20 + provisioning 2–5 + Job ~30 s). Tight for a 20–25 min window. |
-| **Risks** | Provisioning latency variance eats into the round; a participant who types a SKU that is restricted in the subscription/region hits a *second* failure; reset needs 2–5 min outside the round. |
-| **Opinion** | **Keep only if the pilot shows clear events and < 5 min provisioning; otherwise swap for A2 (or A5).** Great "advanced" round for AKS Automatic, but the riskiest core challenge for a 200-level audience. |
+| **Technical feasibility** | **Medium–high – validated on Azure (2026-10-14).** Custom NAP NodePools (`karpenter.sh/v1`, `AKSNodeClass` `default`) work on AKS Automatic. The seeded fault is self-contradictory *inside* the pool (`kubernetes.io/arch In [amd64]` + an approved SKU list of Arm64 `Dps/Dpds v6` sizes): the NodePool reports `READY=True`, `NODES 0` and the event `NoCompatibleInstanceTypes: NodePool requirements filtered out all compatible available instance types`. Deterministic, never auto-fixed. After the fix NAP launched a `Standard_D4as_v6` node and the batch completed ~2 minutes after the change. |
+| **Validation status** | Begin and end state validated on AKS Automatic 1.35 (westus3). Observed pod events: the scheduler's `0/6 nodes are available ...`, a cluster-autoscaler `NotTriggerScaleUp`, and a **misleading Karpenter message** (`label "kubecon.lab/pool" does not have known values (typo of "karpenter.sh/nodepool"?)`) that describes the *other* pools. Regional SKU restrictions matter: the test subscription cannot use v5/v6 x64 sizes in eastus2 (default region is westus3); the end-state SKU list spans v5/v6/v7. |
+| **Fit for 200-level users** | **Stretch.** Requires NodePool/Karpenter concepts (requirements, taints vs tolerations, nodeSelector) and Azure VM naming knowledge (`p` = Arm64). The evidence is spread across scheduler events, Karpenter events and the NodePool object, and the Karpenter "typo" suggestion points the wrong way. Hints are essential. |
+| **Expected time** | 20–30 min (investigation 15–25 + ~2 min provisioning and batch). Tight for a 20–25 min window. |
+| **Risks** | A participant who types a SKU that is restricted in the subscription/region hits a *second* failure; reset needs 2–5 min outside the round; after 10 minutes the finished batch pod disappears with its consolidated node (the Job still shows `Complete`). |
+| **Opinion** | **Advanced bonus round** (technically clean, but the riskiest core challenge for a 200-level audience); put **A2** (or A5) in its core slot. |

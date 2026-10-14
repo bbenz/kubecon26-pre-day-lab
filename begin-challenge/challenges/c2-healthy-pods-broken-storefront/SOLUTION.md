@@ -1,14 +1,15 @@
 # C2 · Walkthrough to the end state (facilitators)
 
-> Spoilers. Exact status messages from the Istio-based controller are to be captured during the Azure pilot
-> and pasted here.
+> Spoilers. Status text and gateway responses below were captured on AKS Automatic 1.35 (westus3) on 2026-10-14.
 
 ## 1. Reproduce from the outside
 
 ```bash
 HOST=$(kubectl get httproute storefront -n c2-storefront -o jsonpath='{.spec.hostnames[0]}')
 IP=$(kubectl get gateway store-gateway -n c2-storefront -o jsonpath='{.status.addresses[0].value}')
-curl -i -H "Host: $HOST" "http://$IP/"          # 5xx from the gateway (Envoy), not from the app
+curl -i -H "Host: $HOST" "http://$IP/"
+# HTTP/1.1 500 Internal Server Error
+# server: istio-envoy          <- answered by the gateway (Envoy), not by the app; empty body
 ```
 
 ## 2. Prove the backend is healthy (go around the gateway)
@@ -21,15 +22,27 @@ curl -s http://localhost:8080/ | grep -o '<title>.*</title>'   # <title>Contoso 
 
 The app works directly, so the failing hop is **gateway → route → Service**.
 
-## 3. Read the route status
+## 3. Read the route status – and the gateway's own log
 
 ```bash
 kubectl describe httproute storefront -n c2-storefront
-kubectl get httproute storefront -n c2-storefront -o yaml | grep -A20 '^status:'
+kubectl get httproute storefront -n c2-storefront -o jsonpath='{range .status.parents[*].conditions[*]}{.type}={.status} {.message}{"\n"}{end}'
+#   Accepted=True Route was valid
+#   ResolvedRefs=True All references resolved          <- looks healthy!
 ```
 
-Expected (Gateway API semantics): `Accepted: True` (the route is attached to the gateway) but
-`ResolvedRefs: False` with reason `BackendNotFound` – the referenced backend port does not exist.
+The Istio-based controller accepts the route and reports its references as resolved: it checks that the
+`store-front` Service exists, not that the *port* exists (the Gateway API spec would expect `ResolvedRefs=False`
+here). The gateway's access log tells the real story:
+
+```bash
+kubectl logs -n c2-storefront deploy/store-gateway-approuting-istio --tail=3
+# {... "response_code":500, "response_code_details":"cluster_not_found", "response_flags":"NC",
+#      "route_name":"c2-storefront.storefront.0", "upstream_cluster":null ...}
+```
+
+`cluster_not_found` / `NC` (no cluster): the route matched (`route_name` = namespace.route.rule), but the
+backend it points to doesn't exist in the gateway's configuration.
 
 ## 4. Compare the route with the Service
 
@@ -49,7 +62,6 @@ The route targets port **8080** – the *container* port. The Service exposes po
 ```bash
 kubectl patch httproute storefront -n c2-storefront --type json \
   -p '[{"op":"replace","path":"/spec/rules/0/backendRefs/0/port","value":80}]'
-kubectl describe httproute storefront -n c2-storefront | grep -A3 ResolvedRefs   # True
 ```
 
 ## 6. Prove it

@@ -66,7 +66,7 @@ completes, and C4/A4 may need 1–5 minutes for new role assignments to propagat
 | C1 | ConfigMap `FASTIFY_ADDRESS` → `0.0.0.0` (+ `FASTIFY_PORT: 3000`), new rollout | [README](challenges/c1-the-store-wont-start/README.md) |
 | C2 | HTTPRoute `backendRefs[0].port` 8080 → 80 | [README](challenges/c2-healthy-pods-broken-storefront/README.md) |
 | C3 | NodePool approved SKUs: Arm64 → amd64 (v5/v6/v7) | [README](challenges/c3-capacity-that-never-arrives/README.md) |
-| C4 | `AZURE_OPENAI_DEPLOYMENT_NAME`: model name → deployment name | [README](challenges/c4-ai-assistant-up-but-not-working/README.md) |
+| C4 | `AZURE_OPENAI_DEPLOYMENT_NAME`: retired deployment → provisioned deployment | [README](challenges/c4-ai-assistant-up-but-not-working/README.md) |
 | A1 | NetworkPolicy: + DNS (UDP/TCP 53) to LocalDNS / kube-dns only | [README](challenges/a1-where-did-dns-go/README.md) |
 | A2 | `checkout-api` CPU limit 100m → 1 (request 500m) | [README](challenges/a2-fast-yesterday-slow-today/README.md) |
 | A3 | `inventory-api` replicas 1 → 2 (PDB unchanged) | [README](challenges/a3-ready-for-maintenance/README.md) |
@@ -84,3 +84,7 @@ shows a fix exactly.
 ./challenge-end-state/azure-cli-powershell/cleanup.ps1
 cd challenge-end-state/terraform && terraform destroy
 ```
+
+The Azure CLI deployments also create (or reuse) `DefaultResourceGroup-<region>` with a Log Analytics workspace
+for Container Insights (`az aks create` monitoring defaults). It is shared by every CLI-created cluster in the
+subscription and is not deleted by the cleanup scripts – remove it yourself when nothing else uses it.

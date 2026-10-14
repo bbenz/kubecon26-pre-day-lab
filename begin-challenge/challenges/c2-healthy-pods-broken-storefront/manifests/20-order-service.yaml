@@ -41,6 +41,8 @@ spec:
       labels:
         app: order-service
         kubecon.lab/challenge: c2
+      annotations:
+        kubectl.kubernetes.io/default-container: order-service
     spec:
       nodeSelector:
         kubernetes.io/os: linux

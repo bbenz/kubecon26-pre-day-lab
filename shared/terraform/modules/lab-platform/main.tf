@@ -83,8 +83,9 @@ resource "azapi_resource" "aks" {
     }
   }
 
+  # ARM JSON casing (issuerURL), not the Azure CLI's issuerUrl.
   response_export_values = {
-    oidc_issuer_url    = "properties.oidcIssuerProfile.issuerUrl"
+    oidc_issuer_url    = "properties.oidcIssuerProfile.issuerURL"
     fqdn               = "properties.fqdn"
     kubernetes_version = "properties.currentKubernetesVersion"
   }

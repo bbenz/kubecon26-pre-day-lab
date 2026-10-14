@@ -90,7 +90,7 @@ begin-challenge/azure-cli-bash/deploy.sh -c a5
 | Aspect | Assessment |
 |---|---|
 | **Technical feasibility** | **High.** Deterministic 20 s warm-up, a readiness probe on `/healthz` (passes immediately) and `maxUnavailable: 1` make every rollout fail customer requests. Locally: 172 of 342 requests failed (HTTP 503) during an 8 s rollout. After the fix (`/ready` + `maxUnavailable: 0`): 1,521 ok / 0 failed in a 70 s rollout. AKS Automatic safeguards only require probes to *exist*, so they don't fix the fault. The app drains gracefully on SIGTERM, so the only failure source is readiness. |
-| **Validation status** | Fault, fix and scoring validated locally with bash, PowerShell and Terraform. **Pending:** run on AKS Automatic (rollout duration with NAP-provisioned nodes). |
+| **Validation status** | Fault, fix and scoring validated locally with bash, PowerShell and Terraform, and **on AKS Automatic 1.35 (westus3, 2026-10-14)**: begin – 144 of 308 customer requests failed (HTTP 503) during a 6 s rollout; end – 1,535 ok / 0 failed during a 69 s rollout. |
 | **Fit for 200-level users** | Very good – one of the best "concept" rounds: the test gives an objective signal, and the fix is a small, well-explained change. |
 | **Expected time** | 15–20 min (each test run ~10–90 s). |
 | **Risks** | Low. If replicas land on a new NAP node the first rollout is slower (image pull), still well within the 240 s timeout. |

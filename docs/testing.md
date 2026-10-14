@@ -69,5 +69,9 @@ Disk attach).
 1. Deploy the begin state with one approach and run `scoring/verify.*` → every challenge NOT PASSED.
 2. Solve each challenge with its `SOLUTION.md` (timing it) → PASSED.
 3. Deploy the end state with another approach → every challenge PASSED.
-4. Work through the pilot gates in [FEASIBILITY.md](../FEASIBILITY.md#pilot-gates--confirm-on-the-first-azure-deployment).
+4. Work through the pilot gates in [FEASIBILITY.md](../FEASIBILITY.md#pilot-gates--results-of-the-first-azure-deployment-2026-10-14-westus3-aks-automatic-1358).
 5. Clean up with the matching `cleanup` script or `terraform destroy`.
+
+First pilot (2026-10-14, westus3, AKS Automatic 1.35.8): begin state deployed with PowerShell and re-run with bash
+(idempotent, resets C1/C2/C4), end state with Terraform. Final results: begin – all ten NOT PASSED with the intended
+symptoms; end – all ten PASSED (bash and PowerShell verifiers). Findings and fixes are listed in FEASIBILITY.md.

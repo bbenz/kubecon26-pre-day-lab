@@ -62,6 +62,33 @@ function Invoke-AzCoreCommand {
 # kubectl against the lab cluster's context only.
 function Invoke-Kubectl { & kubectl --context $script:Ctf.KubeContext @args }
 
+# Runs az with a time limit; returns @{ ExitCode; StdOut; StdErr; TimedOut }.
+# A request can hang on the network without ever returning (no response, no
+# error - seen during the first Azure test runs), so the whole process tree is
+# stopped when the limit is reached.
+function Invoke-AzWithTimeout {
+    param([int]$TimeoutSeconds, [string[]]$Arguments)
+    $az = (Get-Command az -CommandType Application | Select-Object -First 1).Source
+    $psi = [System.Diagnostics.ProcessStartInfo]::new($az)
+    foreach ($a in $Arguments) { $psi.ArgumentList.Add($a) }
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.UseShellExecute = $false
+    $p = [System.Diagnostics.Process]::Start($psi)
+    try {
+        $stdout = $p.StandardOutput.ReadToEndAsync()
+        $stderr = $p.StandardError.ReadToEndAsync()
+        if (-not $p.WaitForExit($TimeoutSeconds * 1000)) {
+            $p.Kill($true)
+            $p.WaitForExit()
+            return @{ ExitCode = -1; StdOut = ''; StdErr = "timed out after $TimeoutSeconds seconds"; TimedOut = $true }
+        }
+        $p.WaitForExit()
+        return @{ ExitCode = $p.ExitCode; StdOut = $stdout.Result; StdErr = $stderr.Result; TimedOut = $false }
+    }
+    finally { $p.Dispose() }
+}
+
 function Invoke-CtfRetry {
     param([int]$Attempts, [int]$DelaySeconds, [scriptblock]$Action)
     for ($i = 1; $i -le $Attempts; $i++) {
@@ -105,7 +132,8 @@ function Initialize-CtfLab {
         [int]$ModelCapacity = 50,
         [string]$AoaiLocation
     )
-    if ($DeploymentName -eq $ModelName) { throw 'DeploymentName must differ from ModelName, otherwise challenge C4 has no fault' }
+    # C4 is seeded with this retired deployment name; the real deployment must differ.
+    if ($DeploymentName -eq 'store-assistant-gpt41') { throw 'DeploymentName must not be store-assistant-gpt41 (the stale name challenge C4 starts with)' }
     $stateFolder = if ($State -eq 'begin') { 'begin-challenge' } else { 'challenge-end-state' }
     $location = ($Location -replace '\s', '').ToLowerInvariant()
     $script:Ctf = [ordered]@{

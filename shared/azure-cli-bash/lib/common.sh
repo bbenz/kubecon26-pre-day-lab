@@ -68,6 +68,25 @@ retry() {
   done
 }
 
+# az rest for idempotent PUT/PATCH requests: retried, and time-limited where
+# `timeout` exists (not on stock macOS). A request can hang on the network
+# without ever returning (no response, no error - seen during the first Azure
+# test runs).
+ctf_az_rest() {
+  local attempt=1 max=3
+  while :; do
+    if command -v timeout >/dev/null 2>&1; then
+      timeout 120 az rest "$@" --only-show-errors -o none && return 0
+    else
+      az rest "$@" --only-show-errors -o none && return 0
+    fi
+    [ "$attempt" -ge "$max" ] && return 1
+    log_warn "az rest failed or timed out (attempt $attempt/$max) - retrying ..."
+    attempt=$((attempt + 1))
+    sleep 10
+  done
+}
+
 ctf_sha1() {
   if command -v sha1sum >/dev/null 2>&1; then sha1sum; else shasum -a 1; fi | cut -d' ' -f1
 }
@@ -137,8 +156,9 @@ ctf_parse_args() {
   AOAI_MODEL_VERSION="${AOAI_MODEL_VERSION:-2026-09-22}"
   AOAI_DEPLOYMENT_NAME="${AOAI_DEPLOYMENT_NAME:-store-assistant}"
   AOAI_CAPACITY="${AOAI_CAPACITY:-50}"
-  [ "$AOAI_DEPLOYMENT_NAME" = "$AOAI_MODEL_NAME" ] && \
-    die "AOAI_DEPLOYMENT_NAME must differ from AOAI_MODEL_NAME, otherwise challenge C4 has no fault"
+  # C4 is seeded with this retired deployment name; the real deployment must differ.
+  [ "$AOAI_DEPLOYMENT_NAME" = "store-assistant-gpt41" ] && \
+    die "AOAI_DEPLOYMENT_NAME must not be store-assistant-gpt41 (the stale name challenge C4 starts with)"
   ctf_resolve_challenges
 }
 

@@ -4,12 +4,15 @@
 
 | | Begin state (fault) | End state (this folder) |
 |---|---|---|
-| NetworkPolicy `inventory-sync-egress` | allows only TCP 8080 to `app=catalog-api` | + UDP/TCP 53 to the cluster DNS path only: LocalDNS (`169.254.10.10/32`, `169.254.10.11/32`) and the `k8s-app=kube-dns` pods in `kube-system` |
+| NetworkPolicy `inventory-sync-egress` | allows only TCP 8080 to `app=catalog-api` | + UDP/TCP 53 with no destination restriction |
 
 `default-deny-egress` is unchanged.
 
-> **Pilot gate:** confirm on AKS Automatic (LocalDNS + Cilium) that this rule restores DNS. If Cilium does not
-> match the LocalDNS addresses with `ipBlock`, update this end state (see the challenge README).
+Why no destination: on AKS Automatic pods resolve through LocalDNS (node-local `169.254.10.11`), and Azure CNI
+powered by Cilium treats that traffic as the `host` entity, which a Kubernetes NetworkPolicy cannot select – the
+textbook rules (53 to the `kube-dns` pods, or `ipBlock` 169.254.10.x) do not restore DNS (verified on Azure).
+The least-privilege alternative, a `CiliumNetworkPolicy` with `toEntities: [host]`, is in the
+[SOLUTION](../../../begin-challenge/challenges/a1-where-did-dns-go/SOLUTION.md) (option B); both pass the checks.
 
 How a participant gets here: [begin-challenge/challenges/a1-where-did-dns-go/SOLUTION.md](../../../begin-challenge/challenges/a1-where-did-dns-go/SOLUTION.md)
 

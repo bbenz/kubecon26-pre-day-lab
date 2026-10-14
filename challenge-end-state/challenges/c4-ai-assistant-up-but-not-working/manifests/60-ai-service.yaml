@@ -18,13 +18,15 @@ metadata:
   labels:
     kubecon.lab/challenge: c4
   annotations:
-    kubecon.lab/change-ticket: "CHG-1142 - point the store assistant at the new GPT model"
+    kubecon.lab/change-ticket: "CHG-1142 - store assistant moves to the new GPT model (platform replaces the GPT-4.1 deployment)"
 data:
   USE_AZURE_OPENAI: "True"
   USE_AZURE_AD: "True"
   USE_LOCAL_LLM: "False"
   AZURE_OPENAI_ENDPOINT: "__AZURE_OPENAI_ENDPOINT__"
-  # FIXED: Azure OpenAI calls use the *deployment* name, not the model name.
+  # FIXED: the model deployment that exists in the Foundry account. The old
+  # store-assistant-gpt41 deployment was removed when the platform moved the
+  # assistant to the new model (CHG-1142).
   AZURE_OPENAI_DEPLOYMENT_NAME: "__AZURE_OPENAI_DEPLOYMENT__"
   AZURE_OPENAI_API_VERSION: "2024-12-01-preview"
 ---
@@ -47,6 +49,10 @@ spec:
         app: ai-service
         kubecon.lab/challenge: c4
         azure.workload.identity/use: "true"
+      annotations:
+        # Changes with the configuration so applying the end state over the
+        # begin state restarts the pods (the ConfigMap is read at start-up).
+        kubecon.lab/config-revision: "CHG-1142-fix"
     spec:
       serviceAccountName: ai-service
       nodeSelector:

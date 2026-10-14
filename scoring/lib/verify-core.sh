@@ -83,7 +83,7 @@ verify_c2() {
 
 # C3 - node auto-provisioning NodePool constraints.
 verify_c3() {
-  local ns=c3-processing arch skus sku arm="" label taint limit sel log node pool
+  local ns=c3-processing arch skus sku arm="" label taint limit sel log node pool job_done=false
   arch=$(kj get nodepool c3-processing -o jsonpath='{.spec.template.spec.requirements[?(@.key=="kubernetes.io/arch")].values[*]}')
   expect "NodePool keeps the required architecture" "amd64" "$arch"
   skus=$(kj get nodepool c3-processing -o jsonpath='{.spec.template.spec.requirements[?(@.key=="karpenter.azure.com/sku-name")].values[*]}')
@@ -105,13 +105,17 @@ verify_c3() {
   # Node provisioning can take a few minutes; do not wait long while the fault is obviously still present.
   if wait_job "$ns" order-batch "$([ -n "$arm" ] && echo 30 || echo "$LONG_WAIT")"; then
     pass "order-batch Job completed"
+    job_done=true
   else
     fail "order-batch Job completed (waited ${LONG_WAIT}s for a node from NAP)"
     detail "$(kj get events -n "$ns" --field-selector reason=FailedScheduling -o jsonpath='{.items[-1:].message}')"
   fi
-  log=$(kj logs job/order-batch -n "$ns" --tail=3)
+  log=$(kj logs job/order-batch -n "$ns" --tail=3 --pod-running-timeout=5s)
   if printf '%s' "$log" | grep -q 'BATCH COMPLETE.*arch x86_64'; then
     pass "batch ran on an amd64 node"
+  elif [ "$job_done" = true ] && [ -z "$(kj get pods -n "$ns" -l app=order-batch -o name)" ]; then
+    # NAP removes the empty node (consolidateAfter) and the finished pod goes with it.
+    pass "batch ran on an amd64 node (pod already removed with its empty node; placement enforced by the Job's nodeSelector)"
   else
     fail "batch ran on an amd64 node"
   fi
@@ -128,7 +132,7 @@ verify_c3() {
 
 # C4 - AI dependency: model deployment name.
 verify_c4() {
-  local ns=c4-assistant use_ad keys out i
+  local ns=c4-assistant use_ad keys out i want dep
   use_ad=$(kj get configmap ai-service-configs -n "$ns" -o jsonpath='{.data.USE_AZURE_AD}')
   keys=$(kj get configmap ai-service-configs -n "$ns" -o jsonpath='{.data.AZURE_OPENAI_API_KEY}{.data.OPENAI_API_KEY}')
   keys="$keys$(kj get deployment ai-service -n "$ns" -o jsonpath='{.spec.template.spec.containers[*].env[?(@.name=="AZURE_OPENAI_API_KEY")].value}{.spec.template.spec.containers[*].env[?(@.name=="OPENAI_API_KEY")].value}')"
@@ -137,6 +141,14 @@ verify_c4() {
   else
     fail "ai-service still authenticates with Microsoft Entra ID (USE_AZURE_AD=$use_ad, API key configured: $([ -n "$keys" ] && echo yes || echo no))"
   fi
+  # The effective setting (a Deployment env var wins over the ConfigMap) must name
+  # the provisioned deployment. A bare model name also answers on Foundry accounts
+  # but bypasses the deployment's capacity and policies. Override the expected
+  # name with AOAI_DEPLOYMENT_NAME if the lab was deployed with another name.
+  want=${AOAI_DEPLOYMENT_NAME:-store-assistant}
+  dep=$(kj get deployment ai-service -n "$ns" -o jsonpath='{.spec.template.spec.containers[*].env[?(@.name=="AZURE_OPENAI_DEPLOYMENT_NAME")].value}')
+  [ -n "$dep" ] || dep=$(kj get configmap ai-service-configs -n "$ns" -o jsonpath='{.data.AZURE_OPENAI_DEPLOYMENT_NAME}')
+  expect "ai-service calls the provisioned model deployment" "$want" "$dep"
   check "ai-service rollout complete, all replicas ready" k rollout status deployment/ai-service -n "$ns" --timeout="${RT}s"
   # The same call the store admin's "Ask AI Assistant" button makes:
   # store-admin nginx -> product-service -> ai-service -> Foundry model deployment.
@@ -156,6 +168,4 @@ verify_c4() {
     detail "$out"
     detail "$(kj logs deployment/ai-service -n "$ns" --tail=50 | grep -iE 'error|exception' | tail -n 2)"
   fi
-  out=$(kj logs deployment/ai-service -n "$ns" --tail=200 | grep 'Using Azure OpenAI' | tail -n 1)
-  if [ -n "$out" ]; then detail "dependency evidence (ai-service log): $out"; fi
 }

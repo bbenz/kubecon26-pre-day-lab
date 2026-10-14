@@ -101,13 +101,19 @@ function Test-ChallengeC3 {
     Expect 'order-batch keeps its placement requirements (pool/arch)' 'processing/amd64' "$($sel.'kubecon.lab/pool')/$($sel.'kubernetes.io/arch')"
     # Node provisioning can take a few minutes; do not wait long while the fault is obviously still present.
     $wait = if ($arm) { 30 } else { $script:LongWait }
-    if (Wait-K8sJob $ns 'order-batch' $wait) { Pass 'order-batch Job completed' }
+    $jobDone = $false
+    if (Wait-K8sJob $ns 'order-batch' $wait) { Pass 'order-batch Job completed'; $jobDone = $true }
     else {
         Fail "order-batch Job completed (waited $($wait)s for a node from NAP)"
         Detail (kj get events -n $ns --field-selector reason=FailedScheduling -o 'jsonpath={.items[-1:].message}')
     }
-    $log = kj logs job/order-batch -n $ns --tail=3
-    if ($log -match 'BATCH COMPLETE.*arch x86_64') { Pass 'batch ran on an amd64 node' } else { Fail 'batch ran on an amd64 node' }
+    $log = kj logs job/order-batch -n $ns --tail=3 --pod-running-timeout=5s
+    if ($log -match 'BATCH COMPLETE.*arch x86_64') { Pass 'batch ran on an amd64 node' }
+    elseif ($jobDone -and -not (kj get pods -n $ns -l app=order-batch -o name)) {
+        # NAP removes the empty node (consolidateAfter) and the finished pod goes with it.
+        Pass "batch ran on an amd64 node (pod already removed with its empty node; placement enforced by the Job's nodeSelector)"
+    }
+    else { Fail 'batch ran on an amd64 node' }
     $node = kj get pods -n $ns -l app=order-batch --field-selector=status.phase=Succeeded -o 'jsonpath={.items[0].spec.nodeName}'
     if ($node) {
         $nodePool = kj get node $node -o 'jsonpath={.metadata.labels.karpenter\.sh/nodepool}'
@@ -125,6 +131,14 @@ function Test-ChallengeC4 {
     $keys += kj get deployment ai-service -n $ns -o 'jsonpath={.spec.template.spec.containers[*].env[?(@.name=="AZURE_OPENAI_API_KEY")].value}{.spec.template.spec.containers[*].env[?(@.name=="OPENAI_API_KEY")].value}'
     if ($useAd -eq 'true' -and -not $keys) { Pass 'ai-service still authenticates with Microsoft Entra ID (no API keys configured)' }
     else { Fail "ai-service still authenticates with Microsoft Entra ID (USE_AZURE_AD=$useAd, API key configured: $([bool]$keys))" }
+    # The effective setting (a Deployment env var wins over the ConfigMap) must name
+    # the provisioned deployment. A bare model name also answers on Foundry accounts
+    # but bypasses the deployment's capacity and policies. Override the expected
+    # name with AOAI_DEPLOYMENT_NAME if the lab was deployed with another name.
+    $want = if ($env:AOAI_DEPLOYMENT_NAME) { $env:AOAI_DEPLOYMENT_NAME } else { 'store-assistant' }
+    $dep = kj get deployment ai-service -n $ns -o 'jsonpath={.spec.template.spec.containers[*].env[?(@.name=="AZURE_OPENAI_DEPLOYMENT_NAME")].value}'
+    if (-not $dep) { $dep = [string](Get-Prop $cm 'data.AZURE_OPENAI_DEPLOYMENT_NAME') }
+    Expect 'ai-service calls the provisioned model deployment' $want $dep
     Check 'ai-service rollout complete, all replicas ready' { Test-Rollout $ns 'ai-service' }
     # The same call the store admin's "Ask AI Assistant" button makes:
     # store-admin nginx -> product-service -> ai-service -> Foundry model deployment.
@@ -143,6 +157,4 @@ function Test-ChallengeC4 {
         Detail $out
         Detail ((kj logs deployment/ai-service -n $ns --tail=50) -split "`r?`n" | Where-Object { $_ -match 'error|exception' } | Select-Object -Last 2 | Out-String)
     }
-    $evidence = (kj logs deployment/ai-service -n $ns --tail=200) -split "`r?`n" | Where-Object { $_ -match 'Using Azure OpenAI' } | Select-Object -Last 1
-    if ($evidence) { Detail "dependency evidence (ai-service log): $evidence" }
 }

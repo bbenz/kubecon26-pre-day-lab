@@ -30,8 +30,10 @@ ctf_ensure_cluster() {
     # --enable-hosted-system   : managed system node pool (system components run on AKS-managed nodes)
     # --enable-gateway-api     : managed Gateway API CRDs (challenge C2)
     # --enable-app-routing-istio: Istio-based Gateway API implementation of the application routing add-on
+    # --no-ssh-key             : otherwise the CLI sends ~/.ssh/id_rsa.pub when it exists, which AKS rejects
+    #                            for Automatic clusters with managed system node pools (BadRequest)
     az_core aks create -g "$RESOURCE_GROUP" -n "$CLUSTER_NAME" -l "$LOCATION" \
-      --sku automatic --enable-hosted-system \
+      --sku automatic --enable-hosted-system --no-ssh-key \
       --enable-gateway-api --enable-app-routing-istio \
       --tags purpose=kubecon-ctf "lab-state=$LAB_STATE" \
       --only-show-errors -o none \
@@ -172,8 +174,8 @@ ctf_ensure_c4_azure() {
   AZURE_OPENAI_ENDPOINT="https://${AOAI_ACCOUNT}.openai.azure.com/"
   if [ "$CTF_SKIP_INFRA" != true ]; then
     # Keys off: the app must authenticate with Microsoft Entra ID (workload identity).
-    az rest --method patch --url "https://management.azure.com${AOAI_ID}?api-version=2024-10-01" \
-      --body '{"properties":{"disableLocalAuth":true}}' --only-show-errors -o none \
+    ctf_az_rest --method patch --url "https://management.azure.com${AOAI_ID}?api-version=2024-10-01" \
+      --body '{"properties":{"disableLocalAuth":true}}' \
       || log_warn "could not disable key authentication on $AOAI_ACCOUNT"
     if ! az cognitiveservices account deployment show -g "$RESOURCE_GROUP" -n "$AOAI_ACCOUNT" \
         --deployment-name "$AOAI_DEPLOYMENT_NAME" -o none 2>/dev/null; then
@@ -222,8 +224,8 @@ ctf_ensure_a4_azure() {
   [ "$CTF_SKIP_INFRA" = true ] && return 0
   # The secret is written through Azure Resource Manager (control plane), so the
   # deploying user needs no Key Vault data-plane role.
-  az rest --method put --url "https://management.azure.com${KV_ID}/secrets/${CTF_SECRET_NAME}?api-version=2023-07-01" \
-    --body "{\"properties\":{\"value\":\"${CTF_SECRET_VALUE}\"}}" --only-show-errors -o none \
+  ctf_az_rest --method put --url "https://management.azure.com${KV_ID}/secrets/${CTF_SECRET_NAME}?api-version=2023-07-01" \
+    --body "{\"properties\":{\"value\":\"${CTF_SECRET_VALUE}\"}}" \
     || die "Could not write secret $CTF_SECRET_NAME"
   log_ok "secret '$CTF_SECRET_NAME' written"
   # Least privilege: read access to this one secret only.

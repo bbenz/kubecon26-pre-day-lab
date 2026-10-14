@@ -4,7 +4,7 @@
 
 | | Begin state (fault) | End state (this folder) |
 |---|---|---|
-| ConfigMap `ai-service-configs`, `AZURE_OPENAI_DEPLOYMENT_NAME` | the **model** name (`gpt-6-luna`) | the **deployment** name (`store-assistant`) |
+| ConfigMap `ai-service-configs`, `AZURE_OPENAI_DEPLOYMENT_NAME` | the retired deployment `store-assistant-gpt41` (doesn't exist) | the provisioned deployment `store-assistant` (model `gpt-6-luna`) |
 
 Microsoft Entra workload identity (`USE_AZURE_AD: True`, no API keys, key auth disabled on the account), the
 model deployment, identity, role assignment and federated credential are identical in both states.

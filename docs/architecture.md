@@ -45,7 +45,7 @@ Both states deploy the same platform; only the challenge layer differs:
 |---|---|---|---|
 | Entry points | `<state>/azure-cli-bash/deploy.sh`, `cleanup.sh` | `<state>/azure-cli-powershell/deploy.ps1`, `cleanup.ps1` | `<state>/terraform` root module |
 | Shared code | `shared/azure-cli-bash/lib/*.sh` | `shared/azure-cli-powershell/CtfLab.psm1` | `shared/terraform/modules/lab-platform`, `lab-challenge` |
-| AKS Automatic | `az aks create --sku automatic --enable-hosted-system --enable-gateway-api --enable-app-routing-istio` | same | `azapi_resource` `Microsoft.ContainerService/managedClusters@2026-05-01` with the equivalent body |
+| AKS Automatic | `az aks create --sku automatic --enable-hosted-system --no-ssh-key --enable-gateway-api --enable-app-routing-istio` | same | `azapi_resource` `Microsoft.ContainerService/managedClusters@2026-05-01` with the equivalent body |
 | Kubernetes objects | `kubectl apply -f` of rendered manifests | same | `alekc/kubectl` `kubectl_manifest` (server-side apply) per YAML document |
 | Kubernetes auth | `az aks get-credentials` + `kubelogin convert-kubeconfig -l azurecli` | same | kubectl provider `exec` → `kubelogin get-token --login azurecli` |
 | State | idempotent re-runs (create-if-missing) | same | Terraform state per folder |
@@ -60,7 +60,14 @@ Both states deploy the same platform; only the challenge layer differs:
 5. Challenge-specific Azure services: Gateway API check (C2), Foundry + identity (C4), Key Vault + identity (A4).
 6. For each selected challenge: render placeholders → (begin state: delete the challenge's namespace/NodePool) →
    namespace → **setup phase** (objects labelled `kubecon.lab/phase: setup`, e.g. A6's disk and seed Job, waited
-   for) → everything else.
+   for) → everything else. Within a challenge, objects that pods depend on (Services, ConfigMaps, policies, ...)
+   are created before the workloads: by the numbered file names with `kubectl`, and by a separate `workloads` phase
+   in the Terraform `lab-challenge` module (Terraform would otherwise create everything in parallel).
+
+Monitoring differs by approach: `az aks create --sku automatic` enables Container Insights and Managed Prometheus
+client-side and, without `--workspace-resource-id`, creates a Log Analytics workspace in
+`DefaultResourceGroup-<region>` (outside the lab resource group; not removed by the cleanup scripts). The Terraform
+(azapi) cluster has no monitoring add-ons. No challenge depends on monitoring.
 
 ### Placeholders
 
@@ -69,7 +76,7 @@ Manifests contain a few `__TOKEN__` placeholders, replaced at deploy time by eve
 | Placeholder | Value |
 |---|---|
 | `__AZURE_OPENAI_ENDPOINT__` | `https://aoai-ctf-<id>.openai.azure.com/` |
-| `__AZURE_OPENAI_DEPLOYMENT__` / `__AZURE_OPENAI_MODEL_NAME__` | `store-assistant` / `gpt-6-luna` |
+| `__AZURE_OPENAI_DEPLOYMENT__` / `__AZURE_OPENAI_MODEL_NAME__` | `store-assistant` / `gpt-6-luna` (C4's begin state names the retired deployment `store-assistant-gpt41` literally) |
 | `__AI_SERVICE_CLIENT_ID__`, `__CONFIG_READER_CLIENT_ID__` | client IDs of the managed identities |
 | `__KEY_VAULT_URI__` | `https://kv-ctf-<id>.vault.azure.net/` |
 | `__STOREFRONT_DNS_LABEL__` / `__STOREFRONT_HOSTNAME__` | `ctf-store-<id>` / `ctf-store-<id>.<region>.cloudapp.azure.com` |
@@ -90,7 +97,18 @@ PowerShell and Terraform, so every approach finds the same globally unique names
 
 * **Deployment safeguards (Enforce, can't be lowered):** every container has readiness/liveness probes and explicit
   requests/limits ≥ 100m CPU / 100Mi; multi-replica Deployments set a topology spread; no `:latest` tags. Faults are
-  chosen so safeguards neither block nor "auto-fix" them (PodDisruptionBudgets are not checked).
-* **Pod Security Standards (baseline):** no privileged containers or host access.
-* **LocalDNS:** pods resolve through a node-local listener – relevant for A1.
-* **Node auto-provisioning:** workload nodes appear on demand; C3 adds a dedicated NodePool.
+  chosen so safeguards neither block nor "auto-fix" them (PodDisruptionBudgets are not checked). Bare pods without
+  resource requests are denied – see the troubleshooting tips in [begin-challenge/README.md](../begin-challenge/README.md).
+* **Pod Security Standards (baseline):** no privileged containers or host access (`kubectl debug` needs
+  `--profile=baseline` or `restricted`).
+* **LocalDNS:** pods resolve through a node-local cache (`169.254.10.11`). Two consequences, both verified on Azure:
+  * Azure CNI powered by Cilium treats that traffic as the `host` entity, which Kubernetes NetworkPolicies can't
+    select – relevant for A1.
+  * The cache serves stale answers (`serveStale: Immediate`, up to 1 hour). Right after a Service is re-created –
+    every challenge reset – the first lookup on a node can return the Service's **previous** ClusterIP. nginx
+    (store-front, store-admin) resolves its upstreams only at startup and would keep proxying to a dead address,
+    so those Deployments run a `warm-dns-cache` init container that looks the upstreams up first.
+* **Node auto-provisioning:** workload nodes appear on demand; C3 adds a dedicated NodePool. Empty nodes are
+  consolidated (C3's pool after 10 minutes), and finished pods on them are garbage-collected with the node.
+* **Foundry model access:** requests addressed to a bare model name (for example `gpt-6-luna`) are answered even
+  without a deployment of that name; only unknown names return `DeploymentNotFound` – relevant for C4.

@@ -43,7 +43,7 @@ variable "aoai_model_version" {
 }
 
 variable "aoai_deployment_name" {
-  description = "Name of the model deployment the store assistant should use (must differ from the model name)."
+  description = "Name of the model deployment the store assistant should use (C4 starts with the stale name store-assistant-gpt41)."
   type        = string
 }
 

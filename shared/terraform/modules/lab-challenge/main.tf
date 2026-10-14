@@ -3,7 +3,12 @@
 # CLI deployments apply with kubectl):
 #   1. Namespaces
 #   2. Objects labelled kubecon.lab/phase=setup; setup Jobs must complete
-#   3. Everything else
+#   3. Everything else except workloads (Services, ConfigMaps, policies, ...)
+#   4. Workloads (Deployments, StatefulSets, Jobs, ...)
+# Step 4 waits for step 3 because Terraform otherwise creates everything in
+# parallel: a pod can start before the Service or ConfigMap it needs exists
+# (for example store-front's nginx exits with "host not found in upstream").
+# The kubectl deployments get the same ordering from the numbered file names.
 # Placeholders such as __KEY_VAULT_URI__ are replaced with var.tokens.
 # -----------------------------------------------------------------------------
 
@@ -36,9 +41,12 @@ locals {
     }
   }
 
+  workload_kinds = ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job", "CronJob", "Pod"]
+
   namespaces = { for k, v in local.by_key : k => v if v.kind == "Namespace" }
   setup      = { for k, v in local.by_key : k => v if v.kind != "Namespace" && v.phase == "setup" }
-  main       = { for k, v in local.by_key : k => v if v.kind != "Namespace" && v.phase != "setup" }
+  main       = { for k, v in local.by_key : k => v if v.kind != "Namespace" && v.phase != "setup" && !contains(local.workload_kinds, v.kind) }
+  workloads  = { for k, v in local.by_key : k => v if v.phase != "setup" && contains(local.workload_kinds, v.kind) }
 }
 
 resource "kubectl_manifest" "namespace" {
@@ -81,10 +89,21 @@ resource "kubectl_manifest" "main" {
   yaml_body         = each.value.yaml
   server_side_apply = true
   force_conflicts   = true
+  wait_for_rollout  = false
+  validate_schema   = false
+
+  depends_on = [kubectl_manifest.namespace, kubectl_manifest.setup]
+}
+
+resource "kubectl_manifest" "workloads" {
+  for_each          = local.workloads
+  yaml_body         = each.value.yaml
+  server_side_apply = true
+  force_conflicts   = true
   # Several challenges start broken on purpose (e.g. CrashLoopBackOff), so never
   # wait for rollouts here.
   wait_for_rollout = false
   validate_schema  = false
 
-  depends_on = [kubectl_manifest.namespace, kubectl_manifest.setup]
+  depends_on = [kubectl_manifest.main]
 }

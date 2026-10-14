@@ -62,6 +62,9 @@ verify_a2() {
   fi
   check "checkout-api rollout complete, all replicas ready" k rollout status deployment/checkout-api -n "$ns" --timeout="${RT}s"
   out=$(kj exec -n "$ns" deployment/loadgen -- python3 /app/loadtest.py)
+  # Empty output means kubectl exec itself failed (for example a dropped API
+  # connection), not the test: run it once more and keep errors for the report.
+  [ -n "$out" ] || out=$(k exec -n "$ns" deployment/loadgen -- python3 /app/loadtest.py 2>&1 | tr -d '\r')
   if printf '%s' "$out" | grep -q '"result": "PASS"'; then
     pass "fixed load test meets the objective"
   else

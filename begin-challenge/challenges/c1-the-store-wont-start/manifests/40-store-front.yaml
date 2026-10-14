@@ -16,9 +16,30 @@ spec:
       labels:
         app: store-front
         kubecon.lab/challenge: c1
+      annotations:
+        kubectl.kubernetes.io/default-container: store-front
     spec:
       nodeSelector:
         kubernetes.io/os: linux
+      initContainers:
+        # AKS Automatic nodes cache DNS answers (LocalDNS, serve-stale). Right after a
+        # Service is re-created - for example by a challenge reset - the first lookup
+        # on a node can still return the Service's previous address. nginx resolves its
+        # upstreams only once, at startup, so look them up first: the first answer
+        # refreshes the node cache and nginx then starts with the current addresses.
+        - name: warm-dns-cache
+          image: mcr.microsoft.com/azurelinux/busybox:1.36
+          command:
+            - sh
+            - -c
+            - for i in 1 2 3; do for h in order-service product-service; do nslookup "$h.c1-store.svc.cluster.local" >/dev/null 2>&1; done; sleep 2; done
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
       containers:
         - name: store-front
           image: ghcr.io/azure-samples/aks-store-demo/store-front:2.2.0

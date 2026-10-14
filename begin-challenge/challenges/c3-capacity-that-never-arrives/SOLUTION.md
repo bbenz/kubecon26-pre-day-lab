@@ -1,6 +1,6 @@
 # C3 · Walkthrough to the end state (facilitators)
 
-> Spoilers. Paste the exact pod/NodePool event text captured during the Azure pilot into steps 1–2.
+> Spoilers. Events below were captured on AKS Automatic 1.35 (westus3) on 2026-10-14.
 
 ## 1. Follow the Pending pod
 
@@ -9,18 +9,23 @@ kubectl get pods -n c3-processing                        # order-batch-xxxxx   0
 kubectl describe pod -n c3-processing -l app=order-batch | sed -n '/Events/,$p'
 ```
 
-Two sources of evidence:
+Three sources of evidence:
 
-* **default-scheduler** – `0/N nodes are available: ... didn't match Pod's node affinity/selector, ... untolerated taint ...`
-  (no *existing* node fits: none carries `kubecon.lab/pool=processing`).
-* **karpenter** (node auto-provisioning) – it cannot create a node for the pod either, because the only pool
-  that matches the pod's label/taint has no usable instance types.
+* **default-scheduler** – `0/6 nodes are available: 1 node(s) didn't match Pod's node affinity/selector,
+  5 node(s) had untolerated taint(s) ...` (no *existing* node fits: none carries `kubecon.lab/pool=processing`).
+* **karpenter** (node auto-provisioning) – `Failed to schedule pod, did not tolerate taint
+  (taint=CriticalAddonsOnly=true:NoSchedule); incompatible requirements, label "kubecon.lab/pool" does not have
+  known values (typo of "karpenter.sh/nodepool"?)`. **Careful – this is a red herring:** Karpenter reports why the
+  *other* pools (`system-surge`, `default`) don't fit. The only pool that could host the pod, `c3-processing`, isn't
+  mentioned because it has no usable instance types at all. Nothing is wrong with the pod's label.
+* **cluster-autoscaler** – `NotTriggerScaleUp ... pod didn't trigger scale-up` (the managed system pool; ignore).
 
 ## 2. Find the eligible pool and read its evidence
 
 ```bash
-kubectl get nodepools                                   # c3-processing  READY=True (!)
-kubectl describe nodepool c3-processing                 # Events: NoCompatibleInstanceTypes ...
+kubectl get nodepools                                   # c3-processing  NODES 0  READY True (!)
+kubectl describe nodepool c3-processing                 # Events: NoCompatibleInstanceTypes
+#   Warning  NoCompatibleInstanceTypes  NodePool requirements filtered out all compatible available instance types
 kubectl get nodepool c3-processing -o yaml | sed -n '/requirements:/,/limits:/p'
 ```
 
@@ -78,7 +83,9 @@ kubectl logs -n c3-processing job/order-batch -f            # ... BATCH COMPLETE
 scoring/verify.sh --challenges c3
 ```
 
-Typically 1–5 minutes from the fix to a Ready node, then ~30 s for the batch.
+Observed on Azure: the node was Ready and the batch finished about 2 minutes after the fix. NAP removes the empty
+node 10 minutes later (`consolidateAfter`), and the finished pod – with its logs – disappears together with the
+node; the Job keeps `Complete`.
 
 ## End state
 

@@ -30,8 +30,10 @@ function Install-CtfCluster {
         # --enable-hosted-system    : managed system node pool (system components on AKS-managed nodes)
         # --enable-gateway-api      : managed Gateway API CRDs (challenge C2)
         # --enable-app-routing-istio: Istio-based Gateway API implementation of the application routing add-on
+        # --no-ssh-key              : otherwise the CLI sends ~/.ssh/id_rsa.pub when it exists, which AKS rejects
+        #                             for Automatic clusters with managed system node pools (BadRequest)
         Invoke-AzCoreCommand aks create -g $c.ResourceGroup -n $c.ClusterName -l $c.Location `
-            --sku automatic --enable-hosted-system --enable-gateway-api --enable-app-routing-istio `
+            --sku automatic --enable-hosted-system --no-ssh-key --enable-gateway-api --enable-app-routing-istio `
             --tags purpose=kubecon-ctf "lab-state=$($c.State)" -o none | Out-Null
         Write-CtfOk 'cluster created'
     }
@@ -127,12 +129,22 @@ function Set-CtfFederatedCredential([string]$Identity, [string]$Name, [string]$S
     Write-CtfOk "federated credential $Name -> $Subject"
 }
 
-# Calls az rest with a JSON body passed through a file (avoids quoting problems with az.cmd on Windows).
-function Invoke-CtfAzRest([string]$Method, [string]$Url, [hashtable]$Body) {
+# Calls az rest with a JSON body passed through a file (avoids quoting problems
+# with az.cmd on Windows). The requests are idempotent PUT/PATCH calls, so one
+# that fails or hangs on the network is retried.
+function Invoke-CtfAzRest([string]$Method, [string]$Url, [hashtable]$Body, [int]$Attempts = 3, [int]$TimeoutSeconds = 120) {
     $file = New-TemporaryFile
     try {
         $Body | ConvertTo-Json -Depth 10 -Compress | Set-Content -Path $file.FullName -Encoding utf8NoBOM
-        Invoke-AzCommand rest --method $Method --url $Url --body "@$($file.FullName)" -o none | Out-Null
+        for ($i = 1; $i -le $Attempts; $i++) {
+            $r = Invoke-AzWithTimeout -TimeoutSeconds $TimeoutSeconds -Arguments @(
+                'rest', '--method', $Method, '--url', $Url, '--body', "@$($file.FullName)", '--only-show-errors', '-o', 'none')
+            if ($r.ExitCode -eq 0) { return }
+            $reason = ($r.StdErr -replace '\s+', ' ').Trim()
+            if ($i -eq $Attempts) { throw "az rest --method $Method --url $Url failed after $Attempts attempts: $reason" }
+            Write-CtfWarn "az rest $Method failed (attempt $i/$Attempts): $reason - retrying ..."
+            Start-Sleep -Seconds 10
+        }
     }
     finally { Remove-Item $file.FullName -ErrorAction SilentlyContinue }
 }
