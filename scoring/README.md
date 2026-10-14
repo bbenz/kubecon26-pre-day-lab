@@ -26,8 +26,8 @@ deployment) it reports **PASSED**.
 |---|---|
 | C1 | `FASTIFY_ADDRESS` in the ConfigMap is a bind host (or unset); no override on the Deployment; rollout ready; no restarts during 60 s; synthetic order via the storefront succeeds and reaches the RabbitMQ queue |
 | C2 | route keeps its hostname, `PathPrefix /` and `store-front` backend; route `Accepted`/`ResolvedRefs`; storefront served through the gateway (200); other Host → 404; `store-front` stays `ClusterIP`; no extra LoadBalancer Services |
-| C3 | NodePool keeps `amd64`, label/taint isolation and CPU limit; no Arm64 sizes in the allow-list; Job keeps its placement; Job completes on a node from `c3-processing` |
-| C4 | Entra ID auth (no API keys); ai-service ready; store-admin → product-service → ai-service → model returns a description (retries for propagation) |
+| C3 | NodePool keeps `amd64`, label/taint isolation and CPU limit; no Arm64 sizes in the allow-list; Job keeps its placement; Job completes on a node from `c3-processing` (if node auto-provisioning has already removed the empty node and the finished pod with it, the completed Job and its placement rules count) |
+| C4 | Entra ID auth (no API keys); `ai-service` is configured for the provisioned model deployment (`store-assistant`, or `AOAI_DEPLOYMENT_NAME` if you deployed with another name); ai-service ready; store-admin → product-service → ai-service → model returns a description (retries for propagation) |
 | A1 | from inside `inventory-sync`: DNS resolves, catalog call works, `ledger-api` and the internet stay blocked; `default-deny-egress` unchanged; no allow-all egress rule |
 | A2 | limits set, CPU ≤ 1, replicas ≤ 2, no HPA > 2; workload/test unchanged; fixed load test p95 ≤ 300 ms, 0 errors |
 | A3 | replicas ≥ 2; PDB still protects the app; an on-demand `maintenance-check` eviction is accepted with 0 failed requests; back at target replicas |

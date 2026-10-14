@@ -80,7 +80,9 @@ Terraform also needs `kubelogin` on `PATH` (it authenticates the kubectl provide
 | Only (re)apply challenges | `--skip-infra` | `-SkipInfra` | n/a | off |
 
 Each approach uses its own default resource group, so they can run side by side. Don't point two Terraform
-states (or Terraform and a script) at the same resource group.
+states (or Terraform and a script) at the same resource group. If several people deploy into the same subscription,
+give each environment its own resource group (for example `-g rg-<alias>-ctf-begin`); otherwise a second deployment
+reuses – and, in the begin state, resets – the first person's challenges.
 
 ### If a deployment stops with an error
 

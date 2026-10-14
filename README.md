@@ -67,6 +67,11 @@ scoring/verify.sh --challenges c1           # or: ./scoring/verify.ps1 -Challeng
 To see the solved configuration, deploy [`challenge-end-state`](challenge-end-state) the same way (its own resource
 group by default) â€“ every challenge should then pass `scoring/verify`.
 
+**Sharing a subscription with others?** The default resource group names are the same for everyone, so pass your
+own (`-g` in bash, `-ResourceGroup` in PowerShell, `resource_group_name` in Terraform), for example
+`rg-<alias>-ctf-begin` and `rg-<alias>-ctf-end`. The globally unique names (Key Vault, Foundry account, storefront
+DNS label) are derived from the subscription and resource group, so they follow automatically.
+
 ## How the environment is built
 
 One **AKS Automatic** cluster per environment (managed system node pool, node auto-provisioning, Azure CNI + Cilium,
@@ -82,5 +87,7 @@ bash library, PowerShell module and Terraform module the Azure deployment uses â
 
 ## Status
 
-Code complete and validated locally (see [FEASIBILITY.md](FEASIBILITY.md#pilot-gates--confirm-on-the-first-azure-deployment)
-for what still needs confirmation on Azure). Nothing in this repository has been deployed to Azure yet.
+Code complete, validated locally (kind) and **piloted on Azure** on 2026-10-14 (AKS Automatic 1.35, westus3): the
+begin state was deployed with the PowerShell and bash scripts and the end state with Terraform. In the final run every
+challenge failed as designed in the begin state and passed in the end state. Pilot results and the changes they
+led to are in [FEASIBILITY.md](FEASIBILITY.md#pilot-gates--results-of-the-first-azure-deployment-2026-10-14-westus3-aks-automatic-1358).

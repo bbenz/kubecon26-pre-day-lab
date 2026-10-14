@@ -38,6 +38,9 @@ cd challenge-end-state/terraform
 cp terraform.tfvars.example terraform.tfvars && terraform init && terraform apply
 ```
 
+If several people deploy into the same subscription, give each environment its own resource group
+(`-g` / `-ResourceGroup` / `resource_group_name`, for example `rg-<alias>-ctf-end`).
+
 ### Solve an existing begin-state environment in place (scripts only)
 
 ```bash
