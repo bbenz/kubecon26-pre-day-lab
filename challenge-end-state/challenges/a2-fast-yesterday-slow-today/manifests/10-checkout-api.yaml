@@ -1,0 +1,151 @@
+# checkout-api: each checkout verifies an order token with PBKDF2 (CPU-bound).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: checkout-api-script
+  namespace: a2-checkout
+  labels:
+    kubecon.lab/challenge: a2
+data:
+  checkout_api.py: |
+    import hashlib, json, os, threading, time
+    from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+
+    # Fixed workload: every checkout verifies an order token with PBKDF2 (CPU-bound).
+    ITERATIONS = 250000
+    SALT = b"kubecon-ctf-a2"
+    STARTED = time.time()
+    served = 0
+    lock = threading.Lock()
+
+
+    def read_file(path, default=""):
+        try:
+            with open(path) as f:
+                return f.read().strip()
+        except OSError:
+            return default
+
+
+    def cpu_stats():
+        stats = {}
+        for line in read_file("/sys/fs/cgroup/cpu.stat").splitlines():
+            key, _, value = line.partition(" ")
+            if value.isdigit():
+                stats[key] = int(value)
+        return stats
+
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def send_json(self, code, payload):
+            body = json.dumps(payload).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            global served
+            if self.path == "/healthz":
+                return self.send_json(200, {"status": "ok"})
+            if self.path == "/stats":
+                s = cpu_stats()
+                return self.send_json(200, {
+                    "pod": os.environ.get("HOSTNAME"),
+                    "cgroup_cpu_max": read_file("/sys/fs/cgroup/cpu.max", "unknown"),
+                    "nr_periods": s.get("nr_periods", 0),
+                    "nr_throttled": s.get("nr_throttled", 0),
+                    "throttled_seconds": round(s.get("throttled_usec", 0) / 1e6, 1),
+                    "checkouts_served": served,
+                    "uptime_seconds": int(time.time() - STARTED),
+                })
+            if self.path.startswith("/checkout"):
+                t0 = time.perf_counter()
+                hashlib.pbkdf2_hmac("sha256", b"order-token", SALT, ITERATIONS)
+                with lock:
+                    served += 1
+                return self.send_json(200, {"status": "confirmed", "server_ms": round((time.perf_counter() - t0) * 1000, 1)})
+            return self.send_json(404, {"error": "not found"})
+
+        def log_message(self, fmt, *args):
+            pass
+
+
+    print(f"checkout-api listening on :8080 (iterations={ITERATIONS})", flush=True)
+    ThreadingHTTPServer(("", 8080), Handler).serve_forever()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: checkout-api
+  namespace: a2-checkout
+  labels:
+    app: checkout-api
+    kubecon.lab/challenge: a2
+  annotations:
+    kubecon.lab/change-ticket: "CHG-1163 - right-size checkout-api to reduce reserved CPU"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: checkout-api
+  template:
+    metadata:
+      labels:
+        app: checkout-api
+        kubecon.lab/challenge: a2
+    spec:
+      containers:
+        - name: checkout-api
+          image: mcr.microsoft.com/azurelinux/base/python:3.12
+          command: ["python3", "-u", "/app/checkout_api.py"]
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: script
+              mountPath: /app
+          # FIXED: a 100m CPU limit throttled this CPU-bound service on every request.
+          # 1 CPU is the top of the approved envelope (LimitRange max) and meets the
+          # p95 objective with one replica. (2 replicas x 1 CPU is another valid fix.)
+          resources:
+            requests:
+              cpu: 500m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+      volumes:
+        - name: script
+          configMap:
+            name: checkout-api-script
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: checkout-api
+  namespace: a2-checkout
+  labels:
+    kubecon.lab/challenge: a2
+spec:
+  selector:
+    app: checkout-api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080

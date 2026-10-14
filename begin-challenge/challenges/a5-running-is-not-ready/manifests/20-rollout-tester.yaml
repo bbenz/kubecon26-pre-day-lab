@@ -1,0 +1,186 @@
+# rollout-tester: sends steady customer traffic to the web Service, starts a new
+# rollout of the web Deployment (new pod-template revision, same image), waits
+# for the rollout to finish and reports any failed customer requests.
+#
+#   kubectl exec -n a5-releases deploy/rollout-tester -- python3 /app/rollout_test.py
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rollout-tester
+  namespace: a5-releases
+  labels:
+    kubecon.lab/challenge: a5
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: rollout-tester
+  namespace: a5-releases
+  labels:
+    kubecon.lab/challenge: a5
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: rollout-tester
+  namespace: a5-releases
+  labels:
+    kubecon.lab/challenge: a5
+subjects:
+  - kind: ServiceAccount
+    name: rollout-tester
+    namespace: a5-releases
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: rollout-tester
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rollout-test-script
+  namespace: a5-releases
+  labels:
+    kubecon.lab/challenge: a5
+data:
+  rollout_test.py: |
+    import json, os, ssl, sys, threading, time, urllib.error, urllib.request
+
+    APP, URL = "web", "http://web:8080/"
+    ROLLOUT_TIMEOUT_S = 240
+    SA = "/var/run/secrets/kubernetes.io/serviceaccount"
+    NS = open(f"{SA}/namespace").read().strip()
+    TOKEN = open(f"{SA}/token").read().strip()
+    API = f"https://{os.environ['KUBERNETES_SERVICE_HOST']}:{os.environ['KUBERNETES_SERVICE_PORT']}"
+    CTX = ssl.create_default_context(cafile=f"{SA}/ca.crt")
+    PATH = f"/apis/apps/v1/namespaces/{NS}/deployments/{APP}"
+
+
+    def api(method, body=None):
+        headers = {"Authorization": f"Bearer {TOKEN}"}
+        if body is not None:
+            headers["Content-Type"] = "application/strategic-merge-patch+json"
+        req = urllib.request.Request(API + PATH, method=method, headers=headers,
+                                     data=json.dumps(body).encode() if body is not None else None)
+        with urllib.request.urlopen(req, context=CTX, timeout=15) as resp:
+            return json.load(resp)
+
+
+    stats = {"ok": 0, "failed": 0, "by_reason": {}}
+    stop = threading.Event()
+
+
+    def record_failure(reason):
+        stats["failed"] += 1
+        stats["by_reason"][reason] = stats["by_reason"].get(reason, 0) + 1
+
+
+    def traffic():
+        while not stop.is_set():
+            try:
+                with urllib.request.urlopen(URL, timeout=2) as resp:
+                    resp.read()
+                    stats["ok"] += 1
+            except urllib.error.HTTPError as e:
+                record_failure(f"HTTP {e.code}")
+            except Exception as e:
+                record_failure(type(e).__name__)
+            time.sleep(0.05)
+
+
+    dep = api("GET")
+    replicas = dep["spec"]["replicas"]
+    container = dep["spec"]["template"]["spec"]["containers"][0]
+    probe = container.get("readinessProbe", {}).get("httpGet", {}).get("path", "(none)")
+    ru = dep["spec"].get("strategy", {}).get("rollingUpdate", {})
+    print(f"Deployment {APP}: replicas={replicas}, readinessProbe path={probe}, "
+          f"maxUnavailable={ru.get('maxUnavailable')}, maxSurge={ru.get('maxSurge')}", flush=True)
+
+    threading.Thread(target=traffic, daemon=True).start()
+    time.sleep(5)
+    baseline_failed = stats["failed"]
+    print(f"Baseline (5s before the rollout): {stats['ok']} ok, {baseline_failed} failed", flush=True)
+
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    patched = api("PATCH", {"spec": {"template": {"metadata": {"annotations": {"kubecon.lab/rollout-test": stamp}}}}})
+    generation = patched["metadata"]["generation"]
+    print(f"Started rollout (new pod template revision, generation {generation}) at {stamp}", flush=True)
+
+    t0, done = time.time(), False
+    while time.time() - t0 < ROLLOUT_TIMEOUT_S:
+        st = api("GET").get("status", {})
+        if (st.get("observedGeneration", 0) >= generation and st.get("updatedReplicas", 0) == replicas
+                and st.get("readyReplicas", 0) == replicas and st.get("availableReplicas", 0) == replicas
+                and st.get("replicas", 0) == replicas):
+            done = True
+            break
+        time.sleep(2)
+    duration = time.time() - t0
+    time.sleep(5)
+    stop.set()
+    time.sleep(0.5)
+
+    failed_during = stats["failed"] - baseline_failed
+    print(f"Rollout {'completed' if done else 'did NOT complete'} in {duration:.0f}s "
+          f"(timeout {ROLLOUT_TIMEOUT_S}s)")
+    print(f"Customer requests: {stats['ok']} ok, {stats['failed']} failed {json.dumps(stats['by_reason'])}")
+    if done and stats["failed"] == 0:
+        print("RESULT: PASS - zero failed customer requests during the rollout", flush=True)
+        sys.exit(0)
+    reason = "rollout did not converge in time" if not done else f"{failed_during} customer requests failed during the rollout"
+    print(f"RESULT: FAIL - {reason}", flush=True)
+    sys.exit(1)
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rollout-tester
+  namespace: a5-releases
+  labels:
+    app: rollout-tester
+    kubecon.lab/challenge: a5
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rollout-tester
+  template:
+    metadata:
+      labels:
+        app: rollout-tester
+        kubecon.lab/challenge: a5
+    spec:
+      serviceAccountName: rollout-tester
+      containers:
+        - name: tester
+          image: mcr.microsoft.com/azurelinux/base/python:3.12
+          # Idle web server keeps the pod running; the test runs via kubectl exec.
+          command: ["python3", "-m", "http.server", "8080", "--directory", "/app"]
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: script
+              mountPath: /app
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+          readinessProbe:
+            tcpSocket:
+              port: 8080
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 8080
+            periodSeconds: 20
+      volumes:
+        - name: script
+          configMap:
+            name: rollout-test-script

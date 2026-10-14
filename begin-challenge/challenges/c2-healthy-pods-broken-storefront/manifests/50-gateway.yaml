@@ -1,0 +1,27 @@
+# Pre-provisioned gateway for the storefront (AKS application routing add-on,
+# Istio-based Gateway API implementation). Do not delete or recreate it during
+# the round: a new gateway means a new load balancer and public IP.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: store-gateway
+  namespace: c2-storefront
+  labels:
+    kubecon.lab/challenge: c2
+  annotations:
+    # The public hostname the storefront route must keep serving.
+    kubecon.lab/storefront-hostname: "__STOREFRONT_HOSTNAME__"
+spec:
+  gatewayClassName: approuting-istio
+  infrastructure:
+    annotations:
+      # Gives the gateway's public IP a stable DNS name:
+      # <label>.<region>.cloudapp.azure.com
+      service.beta.kubernetes.io/azure-dns-label-name: "__STOREFRONT_DNS_LABEL__"
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: Same

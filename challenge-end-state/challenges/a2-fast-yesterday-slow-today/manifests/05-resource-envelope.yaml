@@ -1,0 +1,36 @@
+# The approved resource envelope and performance objective for checkout-api.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: checkout-slo
+  namespace: a2-checkout
+  labels:
+    kubecon.lab/challenge: a2
+data:
+  README.txt: |
+    Checkout performance objective (fixed load test: 120 checkouts, concurrency 4)
+      - p95 latency <= 300 ms
+      - 0 errors
+
+    Approved resource envelope for checkout-api
+      - CPU limit per container: at most 1 CPU   (enforced by LimitRange checkout-resource-envelope)
+      - Memory limit per container: at most 512Mi
+      - Replicas: at most 2 (no autoscaling beyond 2 replicas)
+      - CPU and memory limits must stay set (no unlimited containers)
+
+    Run the fixed load test:
+      kubectl exec -n a2-checkout deploy/loadgen -- python3 /app/loadtest.py
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: checkout-resource-envelope
+  namespace: a2-checkout
+  labels:
+    kubecon.lab/challenge: a2
+spec:
+  limits:
+    - type: Container
+      max:
+        cpu: "1"
+        memory: 512Mi

@@ -1,0 +1,103 @@
+# Persistent order records (Azure Disk, ReadWriteOnce) and the one-time job
+# that seeded them. Objects labelled kubecon.lab/phase=setup are applied first
+# and the seed Job must complete before the application is deployed.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: records-data
+  namespace: a6-records
+  labels:
+    app: records-api
+    kubecon.lab/challenge: a6
+    kubecon.lab/phase: setup
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: managed-csi
+  resources:
+    requests:
+      storage: 8Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: seed-records-script
+  namespace: a6-records
+  labels:
+    kubecon.lab/challenge: a6
+    kubecon.lab/phase: setup
+data:
+  seed.py: |
+    import csv, hashlib, io, os, random, sys
+
+    DATA = "/data"
+    marker = os.path.join(DATA, ".seeded")
+    if os.path.exists(marker):
+        print(f"dataset already present (sha256 {open(marker).read().strip()}) - nothing to do")
+        sys.exit(0)
+    rng = random.Random(20261109)
+    warehouses = ["SEA-1", "PDX-2", "SLC-1", "DEN-3"]
+    buf = io.StringIO()
+    writer = csv.writer(buf, lineterminator="\n")
+    writer.writerow(["order_id", "sku", "quantity", "warehouse"])
+    for i in range(1, 501):
+        writer.writerow([f"ORD-{i:05d}", f"PET-{rng.randint(1, 40):03d}", rng.randint(1, 9), rng.choice(warehouses)])
+    data = buf.getvalue().encode()
+    digest = hashlib.sha256(data).hexdigest()
+    with open(os.path.join(DATA, "records.csv"), "wb") as f:
+        f.write(data)
+    with open(os.path.join(DATA, "records.sha256"), "w") as f:
+        f.write(digest + "\n")
+    with open(marker, "w") as f:
+        f.write(digest + "\n")
+    print(f"seeded 500 order records, sha256={digest}")
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: seed-records
+  namespace: a6-records
+  labels:
+    app: seed-records
+    kubecon.lab/challenge: a6
+    kubecon.lab/phase: setup
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: seed-records
+        kubecon.lab/challenge: a6
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: seed
+          image: mcr.microsoft.com/azurelinux/base/python:3.12
+          command: ["python3", "-u", "/scripts/seed.py"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: script
+              mountPath: /scripts
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+          readinessProbe:
+            exec:
+              command: ["true"]
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["true"]
+            periodSeconds: 10
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: records-data
+        - name: script
+          configMap:
+            name: seed-records-script

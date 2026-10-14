@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: store-front
+  namespace: c2-storefront
+  labels:
+    app: store-front
+    kubecon.lab/challenge: c2
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: store-front
+  template:
+    metadata:
+      labels:
+        app: store-front
+        kubecon.lab/challenge: c2
+    spec:
+      nodeSelector:
+        kubernetes.io/os: linux
+      containers:
+        - name: store-front
+          image: ghcr.io/azure-samples/aks-store-demo/store-front:2.2.0
+          ports:
+            - containerPort: 8080
+              name: store-front
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            failureThreshold: 3
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            failureThreshold: 3
+            initialDelaySeconds: 3
+            periodSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            failureThreshold: 5
+            initialDelaySeconds: 3
+            periodSeconds: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: store-front
+  namespace: c2-storefront
+  labels:
+    kubecon.lab/challenge: c2
+spec:
+  type: ClusterIP
+  selector:
+    app: store-front
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080

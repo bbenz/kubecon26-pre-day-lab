@@ -1,0 +1,111 @@
+# order-service reads its settings from this ConfigMap (envFrom).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: order-service-configs
+  namespace: c4-assistant
+  labels:
+    kubecon.lab/challenge: c4
+data:
+  ORDER_QUEUE_HOSTNAME: "rabbitmq"
+  ORDER_QUEUE_PORT: "5672"
+  ORDER_QUEUE_NAME: "orders"
+  FASTIFY_ADDRESS: "0.0.0.0"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: order-service-secrets
+  namespace: c4-assistant
+  labels:
+    kubecon.lab/challenge: c4
+stringData:
+  ORDER_QUEUE_USERNAME: username
+  ORDER_QUEUE_PASSWORD: password
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-service
+  namespace: c4-assistant
+  labels:
+    app: order-service
+    kubecon.lab/challenge: c4
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: order-service
+  template:
+    metadata:
+      labels:
+        app: order-service
+        kubecon.lab/challenge: c4
+    spec:
+      nodeSelector:
+        kubernetes.io/os: linux
+      initContainers:
+        - name: wait-for-rabbitmq
+          image: mcr.microsoft.com/azurelinux/busybox:1.36
+          command: ["sh", "-c", "until nc -z rabbitmq 5672; do echo waiting for rabbitmq; sleep 2; done"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+      containers:
+        - name: order-service
+          image: ghcr.io/azure-samples/aks-store-demo/order-service:2.2.0
+          ports:
+            - containerPort: 3000
+          envFrom:
+            - configMapRef:
+                name: order-service-configs
+            - secretRef:
+                name: order-service-secrets
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            failureThreshold: 5
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            failureThreshold: 3
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            failureThreshold: 5
+            initialDelaySeconds: 3
+            periodSeconds: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: order-service
+  namespace: c4-assistant
+  labels:
+    kubecon.lab/challenge: c4
+spec:
+  type: ClusterIP
+  selector:
+    app: order-service
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000

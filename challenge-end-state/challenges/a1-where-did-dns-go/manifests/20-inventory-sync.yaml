@@ -1,0 +1,139 @@
+# inventory-sync pulls the product catalog from catalog-api every few seconds.
+# Its own health endpoint only says "the process is up" - check its logs and
+# /status to see whether syncing actually works.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: inventory-sync-script
+  namespace: a1-inventory
+  labels:
+    kubecon.lab/challenge: a1
+data:
+  sync.py: |
+    import json, os, socket, threading, time, urllib.request
+    from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+
+    HOST = os.environ.get("CATALOG_HOST", "catalog-api")
+    URL = f"http://{HOST}:8080/items"
+    INTERVAL = int(os.environ.get("SYNC_INTERVAL_SECONDS", "5"))
+    state = {"target": URL, "dns": "pending", "http": "pending", "items": 0,
+             "lastSuccess": None, "lastError": None, "consecutiveFailures": 0}
+
+    def log(msg):
+        print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
+
+    def sync_once():
+        try:
+            addr = socket.getaddrinfo(HOST, 8080, proto=socket.IPPROTO_TCP)[0][4][0]
+            state["dns"] = f"ok ({HOST} -> {addr})"
+        except socket.gaierror as e:
+            state.update(dns=f"FAILED: {e}", http="skipped", lastError=f"DNS lookup for {HOST} failed: {e}")
+            state["consecutiveFailures"] += 1
+            log(f"sync FAILED - could not resolve {HOST}: {e}")
+            return
+        try:
+            with urllib.request.urlopen(URL, timeout=4) as resp:
+                items = json.load(resp)["items"]
+            state.update(http="ok", items=len(items), lastSuccess=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                         lastError=None, consecutiveFailures=0)
+            log(f"sync ok - {len(items)} items from {HOST} ({addr})")
+        except Exception as e:
+            state.update(http=f"FAILED: {e}", lastError=f"HTTP call to {URL} failed: {e}")
+            state["consecutiveFailures"] += 1
+            log(f"sync FAILED - {HOST} resolved to {addr} but the HTTP call failed: {e}")
+
+    def loop():
+        while True:
+            sync_once()
+            time.sleep(INTERVAL)
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_GET(self):
+            payload = {"status": "ok"} if self.path == "/healthz" else state
+            body = json.dumps(payload, indent=2).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, fmt, *args):
+            pass
+
+    threading.Thread(target=loop, daemon=True).start()
+    log(f"inventory-sync started; syncing from {URL} every {INTERVAL}s")
+    ThreadingHTTPServer(("", 8080), Handler).serve_forever()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inventory-sync
+  namespace: a1-inventory
+  labels:
+    app: inventory-sync
+    kubecon.lab/challenge: a1
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: inventory-sync
+  template:
+    metadata:
+      labels:
+        app: inventory-sync
+        kubecon.lab/challenge: a1
+    spec:
+      dnsConfig:
+        options:
+          # Fail fast instead of hanging for ~30s when DNS is unreachable.
+          - name: timeout
+            value: "2"
+          - name: attempts
+            value: "1"
+      containers:
+        - name: sync
+          image: mcr.microsoft.com/azurelinux/base/python:3.12
+          command: ["python3", "-u", "/app/sync.py"]
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: script
+              mountPath: /app
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            periodSeconds: 10
+      volumes:
+        - name: script
+          configMap:
+            name: inventory-sync-script
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: inventory-sync
+  namespace: a1-inventory
+  labels:
+    kubecon.lab/challenge: a1
+spec:
+  selector:
+    app: inventory-sync
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080

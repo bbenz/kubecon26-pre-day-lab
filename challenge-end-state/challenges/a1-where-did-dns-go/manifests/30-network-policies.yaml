@@ -1,0 +1,59 @@
+# Namespace network isolation (CHG-1150).
+# 1) Deny all egress for every pod in the namespace by default.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-egress
+  namespace: a1-inventory
+  labels:
+    kubecon.lab/challenge: a1
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+---
+# 2) inventory-sync may only call the catalog API - plus DNS, which it needs to
+#    find the catalog API by name.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: inventory-sync-egress
+  namespace: a1-inventory
+  labels:
+    kubecon.lab/challenge: a1
+  annotations:
+    kubecon.lab/change-ticket: "CHG-1150 - lock down inventory-sync egress to the catalog API only"
+spec:
+  podSelector:
+    matchLabels:
+      app: inventory-sync
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: catalog-api
+      ports:
+        - protocol: TCP
+          port: 8080
+    # FIXED: allow DNS, but only to the cluster's DNS path.
+    #  - AKS Automatic uses LocalDNS: pods send queries to the node-local
+    #    listener (169.254.10.10 / 169.254.10.11, see /etc/resolv.conf).
+    #  - Clusters without LocalDNS send queries to the CoreDNS (kube-dns) pods.
+    - to:
+        - ipBlock:
+            cidr: 169.254.10.10/32
+        - ipBlock:
+            cidr: 169.254.10.11/32
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53

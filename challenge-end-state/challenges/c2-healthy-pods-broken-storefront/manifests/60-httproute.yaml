@@ -1,0 +1,25 @@
+# Storefront route created during the Ingress-NGINX -> Gateway API migration.
+# FIXED: backendRefs[].port is the *Service* port (80), not the container port (8080).
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: storefront
+  namespace: c2-storefront
+  labels:
+    kubecon.lab/challenge: c2
+  annotations:
+    kubecon.lab/change-ticket: "CHG-1121 - move storefront traffic from Ingress-NGINX to Gateway API"
+spec:
+  parentRefs:
+    - name: store-gateway
+      sectionName: http
+  hostnames:
+    - "__STOREFRONT_HOSTNAME__"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: store-front
+          port: 80

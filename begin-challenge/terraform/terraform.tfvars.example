@@ -1,0 +1,7 @@
+# Copy to terraform.tfvars (git-ignored) and adjust.
+subscription_id = "00000000-0000-0000-0000-000000000000" # az account show --query id -o tsv
+location        = "westus3"
+challenges      = ["all"] # or e.g. ["c1", "c3", "a5"]
+# resource_group_name = "rg-kubecon-ctf-begin-tf"
+# aoai_model_name     = "gpt-6-luna"
+# aoai_model_version  = "2026-09-22"

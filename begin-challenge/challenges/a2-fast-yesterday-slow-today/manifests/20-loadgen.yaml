@@ -1,0 +1,105 @@
+# loadgen: runs the fixed, bounded checkout load test on demand:
+#   kubectl exec -n a2-checkout deploy/loadgen -- python3 /app/loadtest.py
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loadtest-script
+  namespace: a2-checkout
+  labels:
+    kubecon.lab/challenge: a2
+data:
+  loadtest.py: |
+    import concurrent.futures, json, os, sys, time, urllib.request
+
+    TARGET = "http://checkout-api:8080/checkout"
+    REQUESTS = 120
+    CONCURRENCY = 4
+    TARGET_P95_MS = 300.0
+    TIMEOUT_S = 10
+
+
+    def one(i):
+        t0 = time.perf_counter()
+        try:
+            with urllib.request.urlopen(f"{TARGET}?order={i}", timeout=TIMEOUT_S) as r:
+                r.read()
+                ok = r.status == 200
+        except Exception:
+            ok = False
+        return ok, (time.perf_counter() - t0) * 1000
+
+
+    def pct(values, p):
+        values = sorted(values)
+        k = max(0, min(len(values) - 1, int(round(p / 100 * len(values) + 0.5)) - 1))
+        return values[k]
+
+
+    print(f"Checkout load test: {REQUESTS} requests, concurrency {CONCURRENCY}, "
+          f"objective p95 <= {TARGET_P95_MS:.0f} ms with 0 errors", flush=True)
+    started = time.perf_counter()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=CONCURRENCY) as pool:
+        results = list(pool.map(one, range(REQUESTS)))
+    elapsed = time.perf_counter() - started
+    lat = [ms for ok, ms in results if ok]
+    errors = sum(1 for ok, _ in results if not ok)
+    p50 = pct(lat, 50) if lat else float("inf")
+    p95 = pct(lat, 95) if lat else float("inf")
+    passed = errors == 0 and p95 <= TARGET_P95_MS
+    summary = {"requests": REQUESTS, "concurrency": CONCURRENCY, "errors": errors,
+               "p50_ms": round(p50, 1), "p95_ms": round(p95, 1),
+               "max_ms": round(max(lat), 1) if lat else None,
+               "duration_s": round(elapsed, 1), "throughput_rps": round(REQUESTS / elapsed, 1),
+               "objective_p95_ms": TARGET_P95_MS, "result": "PASS" if passed else "FAIL"}
+    print(json.dumps(summary), flush=True)
+    sys.exit(0 if passed else 1)
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: loadgen
+  namespace: a2-checkout
+  labels:
+    app: loadgen
+    kubecon.lab/challenge: a2
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: loadgen
+  template:
+    metadata:
+      labels:
+        app: loadgen
+        kubecon.lab/challenge: a2
+    spec:
+      containers:
+        - name: loadgen
+          image: mcr.microsoft.com/azurelinux/base/python:3.12
+          # Idle web server keeps the pod running (and gives the probes something
+          # to check); the load test itself is started on demand with kubectl exec.
+          command: ["python3", "-m", "http.server", "8080", "--directory", "/app"]
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: script
+              mountPath: /app
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          readinessProbe:
+            tcpSocket:
+              port: 8080
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 8080
+            periodSeconds: 20
+      volumes:
+        - name: script
+          configMap:
+            name: loadtest-script

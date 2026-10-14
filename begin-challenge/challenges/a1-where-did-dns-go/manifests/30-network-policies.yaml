@@ -1,0 +1,38 @@
+# Namespace network isolation (CHG-1150).
+# 1) Deny all egress for every pod in the namespace by default.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-egress
+  namespace: a1-inventory
+  labels:
+    kubecon.lab/challenge: a1
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+---
+# 2) inventory-sync may only call the catalog API.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: inventory-sync-egress
+  namespace: a1-inventory
+  labels:
+    kubecon.lab/challenge: a1
+  annotations:
+    kubecon.lab/change-ticket: "CHG-1150 - lock down inventory-sync egress to the catalog API only"
+spec:
+  podSelector:
+    matchLabels:
+      app: inventory-sync
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: catalog-api
+      ports:
+        - protocol: TCP
+          port: 8080

@@ -1,0 +1,182 @@
+# Small JSON APIs used by this challenge:
+#   catalog-api - the dependency inventory-sync is ALLOWED to call
+#   ledger-api  - a sensitive service inventory-sync must NOT be able to reach
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: json-api-script
+  namespace: a1-inventory
+  labels:
+    kubecon.lab/challenge: a1
+data:
+  api.py: |
+    import json, os
+    from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+
+    NAME = os.environ.get("SERVICE_NAME", "api")
+    ITEMS = [
+        {"sku": "PET-001", "name": "Contoso Catnip Kicker", "stock": 42},
+        {"sku": "PET-002", "name": "Seafarer's Tug Rope", "stock": 17},
+        {"sku": "PET-003", "name": "Salty Sailor's Squeaky Squid", "stock": 8},
+        {"sku": "PET-004", "name": "Mermaid's Mice Trio", "stock": 25},
+        {"sku": "PET-005", "name": "Captain Claw's Crab Cat Toy", "stock": 13},
+    ]
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_GET(self):
+            if self.path == "/healthz":
+                payload = {"status": "ok"}
+            elif self.path.startswith("/items") and NAME == "catalog-api":
+                payload = {"service": NAME, "items": ITEMS}
+            else:
+                payload = {"service": NAME, "message": f"hello from {NAME}"}
+            body = json.dumps(payload).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, fmt, *args):
+            pass
+
+    print(f"{NAME} listening on :8080", flush=True)
+    ThreadingHTTPServer(("", 8080), Handler).serve_forever()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: catalog-api
+  namespace: a1-inventory
+  labels:
+    app: catalog-api
+    kubecon.lab/challenge: a1
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: catalog-api
+  template:
+    metadata:
+      labels:
+        app: catalog-api
+        kubecon.lab/challenge: a1
+    spec:
+      containers:
+        - name: api
+          image: mcr.microsoft.com/azurelinux/base/python:3.12
+          command: ["python3", "-u", "/app/api.py"]
+          env:
+            - name: SERVICE_NAME
+              value: catalog-api
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: script
+              mountPath: /app
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            periodSeconds: 10
+      volumes:
+        - name: script
+          configMap:
+            name: json-api-script
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: catalog-api
+  namespace: a1-inventory
+  labels:
+    kubecon.lab/challenge: a1
+spec:
+  selector:
+    app: catalog-api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ledger-api
+  namespace: a1-inventory
+  labels:
+    app: ledger-api
+    kubecon.lab/challenge: a1
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ledger-api
+  template:
+    metadata:
+      labels:
+        app: ledger-api
+        kubecon.lab/challenge: a1
+    spec:
+      containers:
+        - name: api
+          image: mcr.microsoft.com/azurelinux/base/python:3.12
+          command: ["python3", "-u", "/app/api.py"]
+          env:
+            - name: SERVICE_NAME
+              value: ledger-api
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: script
+              mountPath: /app
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            periodSeconds: 10
+      volumes:
+        - name: script
+          configMap:
+            name: json-api-script
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ledger-api
+  namespace: a1-inventory
+  labels:
+    kubecon.lab/challenge: a1
+spec:
+  selector:
+    app: ledger-api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080

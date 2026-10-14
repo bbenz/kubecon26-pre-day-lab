@@ -1,0 +1,13 @@
+# Disruption budget for inventory-api: at least one replica must stay available.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: inventory-api
+  namespace: a3-maintenance
+  labels:
+    kubecon.lab/challenge: a3
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: inventory-api

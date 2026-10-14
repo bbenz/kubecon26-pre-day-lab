@@ -1,0 +1,56 @@
+# Dedicated node auto-provisioning (NAP / Karpenter) NodePool for the
+# order-processing batch workload. Only pods that carry the matching
+# nodeSelector AND toleration can land on these nodes.
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: c3-processing
+  labels:
+    kubecon.lab/challenge: c3
+  annotations:
+    kubecon.lab/change-ticket: "CHG-1134 - cost optimization: restrict the processing pool to approved instance types"
+spec:
+  template:
+    metadata:
+      labels:
+        kubecon.lab/pool: processing
+    spec:
+      nodeClassRef:
+        group: karpenter.azure.com
+        kind: AKSNodeClass
+        name: default
+      taints:
+        - key: kubecon.lab/pool
+          value: processing
+          effect: NoSchedule
+      expireAfter: Never
+      requirements:
+        - key: kubernetes.io/os
+          operator: In
+          values: ["linux"]
+        # The order-processing image is only published for amd64.
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["amd64"]
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["on-demand"]
+        - key: karpenter.azure.com/sku-family
+          operator: In
+          values: ["D"]
+        - key: karpenter.azure.com/sku-cpu
+          operator: In
+          values: ["2", "4"]
+        # Approved instance types (CHG-1134)
+        - key: karpenter.azure.com/sku-name
+          operator: In
+          values:
+            - Standard_D2ps_v6
+            - Standard_D4ps_v6
+            - Standard_D2pds_v6
+            - Standard_D4pds_v6
+  limits:
+    cpu: "8"
+  disruption:
+    consolidationPolicy: WhenEmpty
+    consolidateAfter: 10m

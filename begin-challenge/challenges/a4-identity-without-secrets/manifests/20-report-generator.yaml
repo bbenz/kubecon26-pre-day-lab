@@ -1,0 +1,88 @@
+# An UNRELATED workload that reuses the same managed identity client ID in its
+# service-account annotation. It must NOT be able to read the configuration
+# value: only the config-reader service account is federated with the identity.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: report-generator
+  namespace: a4-config
+  labels:
+    kubecon.lab/challenge: a4
+  annotations:
+    azure.workload.identity/client-id: "__CONFIG_READER_CLIENT_ID__"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: report-generator
+  namespace: a4-config
+  labels:
+    app: report-generator
+    kubecon.lab/challenge: a4
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: report-generator
+  template:
+    metadata:
+      labels:
+        app: report-generator
+        kubecon.lab/challenge: a4
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: report-generator
+      containers:
+        - name: reader
+          image: mcr.microsoft.com/azurelinux/base/python:3.12
+          command: ["python3", "-u", "/app/reader.py"]
+          env:
+            - name: APP_NAME
+              value: report-generator
+            - name: KEY_VAULT_URI
+              value: "__KEY_VAULT_URI__"
+            - name: SECRET_NAME
+              value: lab-config
+            - name: CHECK_INTERVAL_SECONDS
+              value: "60"
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: script
+              mountPath: /app
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            periodSeconds: 10
+      volumes:
+        - name: script
+          configMap:
+            name: config-reader-script
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: report-generator
+  namespace: a4-config
+  labels:
+    kubecon.lab/challenge: a4
+spec:
+  selector:
+    app: report-generator
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080

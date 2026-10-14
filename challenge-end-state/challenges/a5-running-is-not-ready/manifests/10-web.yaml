@@ -1,0 +1,156 @@
+# web: the storefront web tier. On start it loads its product cache for
+# WARMUP_SECONDS and cannot serve customer requests until that finishes.
+#   GET /healthz -> 200 as soon as the process is up (is it alive?)
+#   GET /ready   -> 503 while warming up or shutting down, 200 when it can serve
+#   GET /        -> customer request (503 while warming up)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: web-script
+  namespace: a5-releases
+  labels:
+    kubecon.lab/challenge: a5
+data:
+  web.py: |
+    import json, os, signal, threading, time
+    from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+
+    WARMUP_SECONDS = 20
+    POD = os.environ.get("HOSTNAME", "web")
+    STARTED = time.time()
+    draining = threading.Event()
+
+
+    def warm():
+        return time.time() - STARTED >= WARMUP_SECONDS
+
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def send(self, code, payload):
+            body = json.dumps(payload).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            if self.path == "/healthz":
+                return self.send(200, {"status": "alive", "pod": POD})
+            if self.path == "/ready":
+                if draining.is_set():
+                    return self.send(503, {"status": "shutting down", "pod": POD})
+                if not warm():
+                    left = WARMUP_SECONDS - (time.time() - STARTED)
+                    return self.send(503, {"status": "warming up", "seconds_left": round(left, 1), "pod": POD})
+                return self.send(200, {"status": "ready", "pod": POD})
+            if not warm():
+                return self.send(503, {"error": "product cache still loading - try again shortly", "pod": POD})
+            return self.send(200, {"message": "Welcome to the Contoso Pet Store", "pod": POD})
+
+        def log_message(self, fmt, *args):
+            pass
+
+
+    def announce_ready():
+        time.sleep(WARMUP_SECONDS)
+        print(f"[{POD}] product cache loaded after {WARMUP_SECONDS}s - now serving customer requests", flush=True)
+
+
+    def on_sigterm(signum, frame):
+        # Graceful shutdown: report not-ready, keep serving in-flight requests
+        # while the endpoint is removed from the Service, then exit.
+        draining.set()
+        print(f"[{POD}] SIGTERM received - draining for 5s", flush=True)
+        threading.Timer(5, lambda: os._exit(0)).start()
+
+
+    signal.signal(signal.SIGTERM, on_sigterm)
+    threading.Thread(target=announce_ready, daemon=True).start()
+    print(f"[{POD}] starting; loading product cache ({WARMUP_SECONDS}s)", flush=True)
+    ThreadingHTTPServer(("", 8080), Handler).serve_forever()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: a5-releases
+  labels:
+    app: web
+    kubecon.lab/challenge: a5
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # FIXED: never remove an old (serving) replica before a new one is Ready.
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+        kubecon.lab/challenge: a5
+    spec:
+      terminationGracePeriodSeconds: 20
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: web
+      containers:
+        - name: web
+          image: mcr.microsoft.com/azurelinux/base/python:3.12
+          command: ["python3", "-u", "/app/web.py"]
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: script
+              mountPath: /app
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+          # FIXED: readiness uses the endpoint that reports whether the pod can
+          # actually serve customers. Liveness keeps using /healthz (process alive).
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+            periodSeconds: 2
+            failureThreshold: 1
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            periodSeconds: 10
+            failureThreshold: 3
+      volumes:
+        - name: script
+          configMap:
+            name: web-script
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  namespace: a5-releases
+  labels:
+    kubecon.lab/challenge: a5
+spec:
+  selector:
+    app: web
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080

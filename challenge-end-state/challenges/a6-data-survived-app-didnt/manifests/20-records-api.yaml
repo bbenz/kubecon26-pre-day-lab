@@ -1,0 +1,138 @@
+# records-api serves the persisted order records.
+#   GET /ready   -> 200 only when the dataset is present and its checksum is intact
+#   GET /records -> record count + checksum
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: records-api-script
+  namespace: a6-records
+  labels:
+    kubecon.lab/challenge: a6
+data:
+  api.py: |
+    import hashlib, json, os
+    from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+
+    DATA = "/data"
+
+
+    def dataset():
+        try:
+            with open(os.path.join(DATA, "records.csv"), "rb") as f:
+                raw = f.read()
+        except FileNotFoundError:
+            return {"present": False, "records": 0, "sha256": None, "expected_sha256": None, "intact": False}
+        try:
+            with open(os.path.join(DATA, "records.sha256")) as f:
+                expected = f.read().strip()
+        except FileNotFoundError:
+            expected = None
+        digest = hashlib.sha256(raw).hexdigest()
+        rows = raw.decode().strip().splitlines()
+        return {"present": True, "records": max(0, len(rows) - 1), "sha256": digest,
+                "expected_sha256": expected, "intact": digest == expected}
+
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def send(self, code, payload):
+            body = json.dumps(payload).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            if self.path == "/healthz":
+                return self.send(200, {"status": "alive"})
+            info = dataset()
+            if self.path == "/ready":
+                return self.send(200 if info["intact"] else 503, info)
+            if self.path.startswith("/records"):
+                return self.send(200 if info["present"] else 404, info)
+            return self.send(404, {"error": "not found"})
+
+        def log_message(self, fmt, *args):
+            pass
+
+
+    info = dataset()
+    print(f"records-api starting: dataset present={info['present']} records={info['records']} intact={info['intact']}", flush=True)
+    ThreadingHTTPServer(("", 8080), Handler).serve_forever()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: records-api
+  namespace: a6-records
+  labels:
+    app: records-api
+    kubecon.lab/challenge: a6
+  annotations:
+    kubecon.lab/change-ticket: "CHG-1177 - prepare records-api for the storage migration"
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: records-api
+  template:
+    metadata:
+      labels:
+        app: records-api
+        kubecon.lab/challenge: a6
+    spec:
+      containers:
+        - name: api
+          image: mcr.microsoft.com/azurelinux/base/python:3.12
+          command: ["python3", "-u", "/app/api.py"]
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: script
+              mountPath: /app
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            periodSeconds: 10
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            # FIXED: reference the original claim that holds the seeded records.
+            claimName: records-data
+        - name: script
+          configMap:
+            name: records-api-script
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: records-api
+  namespace: a6-records
+  labels:
+    kubecon.lab/challenge: a6
+spec:
+  selector:
+    app: records-api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080

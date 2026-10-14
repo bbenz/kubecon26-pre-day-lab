@@ -1,0 +1,261 @@
+# Pre-maintenance check: performs ONE controlled voluntary eviction of an
+# inventory-api pod (Eviction API - the same call 'kubectl drain' makes) while
+# sending synthetic requests, then reports PASS/FAIL.
+#
+# Run it on demand:
+#   kubectl create job -n a3-maintenance --from=cronjob/maintenance-check check-$(date +%s)
+#   kubectl logs -n a3-maintenance -f job/<job-name>
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: maintenance-check
+  namespace: a3-maintenance
+  labels:
+    kubecon.lab/challenge: a3
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: maintenance-check
+  namespace: a3-maintenance
+  labels:
+    kubecon.lab/challenge: a3
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/eviction"]
+    verbs: ["create"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get"]
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: maintenance-check
+  namespace: a3-maintenance
+  labels:
+    kubecon.lab/challenge: a3
+subjects:
+  - kind: ServiceAccount
+    name: maintenance-check
+    namespace: a3-maintenance
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: maintenance-check
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: maintenance-check-script
+  namespace: a3-maintenance
+  labels:
+    kubecon.lab/challenge: a3
+data:
+  check.py: |
+    import json, os, ssl, sys, threading, time, urllib.error, urllib.request
+
+    APP = "inventory-api"
+    SA = "/var/run/secrets/kubernetes.io/serviceaccount"
+    NS = open(f"{SA}/namespace").read().strip()
+    TOKEN = open(f"{SA}/token").read().strip()
+    API = f"https://{os.environ['KUBERNETES_SERVICE_HOST']}:{os.environ['KUBERNETES_SERVICE_PORT']}"
+    CTX = ssl.create_default_context(cafile=f"{SA}/ca.crt")
+
+
+    def api(method, path, body=None):
+        data = json.dumps(body).encode() if body is not None else None
+        req = urllib.request.Request(API + path, data=data, method=method, headers={
+            "Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, context=CTX, timeout=15) as resp:
+                return resp.status, json.load(resp)
+        except urllib.error.HTTPError as e:
+            raw = e.read()
+            try:
+                return e.code, json.loads(raw)
+            except ValueError:
+                return e.code, {"message": raw.decode(errors="replace")}
+
+
+    def deployment():
+        return api("GET", f"/apis/apps/v1/namespaces/{NS}/deployments/{APP}")[1]
+
+
+    def app_pods():
+        items = api("GET", f"/api/v1/namespaces/{NS}/pods?labelSelector=app%3D{APP}")[1].get("items", [])
+        return [p for p in items if not p["metadata"].get("deletionTimestamp")]
+
+
+    stats = {"ok": 0, "failed": 0}
+    stop = threading.Event()
+
+
+    def traffic():
+        while not stop.is_set():
+            try:
+                with urllib.request.urlopen(f"http://{APP}:8080/", timeout=2) as resp:
+                    stats["ok" if resp.status == 200 else "failed"] += 1
+            except Exception:
+                stats["failed"] += 1
+            time.sleep(0.2)
+
+
+    def finish(passed, reason):
+        stop.set()
+        print(f"Synthetic requests during the check: {stats['ok']} succeeded, {stats['failed']} failed")
+        print(("RESULT: PASS - " if passed else "RESULT: FAIL - ") + reason, flush=True)
+        sys.exit(0 if passed else 1)
+
+
+    print(f"Pre-maintenance check for deployment/{APP} in namespace {NS}", flush=True)
+    for _ in range(40):  # wait up to ~2 minutes for the app to be ready first
+        dep = deployment()
+        desired = dep["spec"].get("replicas", 1)
+        if dep.get("status", {}).get("readyReplicas", 0) >= desired:
+            break
+        time.sleep(3)
+    dep = deployment()
+    desired = dep["spec"].get("replicas", 1)
+    print(f"Deployment {APP}: desired replicas={desired}, ready={dep.get('status', {}).get('readyReplicas', 0)}")
+    for pdb in api("GET", f"/apis/policy/v1/namespaces/{NS}/poddisruptionbudgets")[1].get("items", []):
+        spec, st = pdb["spec"], pdb.get("status", {})
+        print(f"PodDisruptionBudget {pdb['metadata']['name']}: minAvailable={spec.get('minAvailable')} "
+              f"maxUnavailable={spec.get('maxUnavailable')} currentHealthy={st.get('currentHealthy')} "
+              f"disruptionsAllowed={st.get('disruptionsAllowed')}")
+
+    running = [p for p in app_pods() if p["status"].get("phase") == "Running"]
+    if not running:
+        finish(False, f"no running {APP} pods to test")
+    victim = running[0]["metadata"]["name"]
+
+    threading.Thread(target=traffic, daemon=True).start()
+    time.sleep(3)
+    print(f"Requesting voluntary eviction of pod {victim} ...", flush=True)
+    code, resp = api("POST", f"/api/v1/namespaces/{NS}/pods/{victim}/eviction",
+                     {"apiVersion": "policy/v1", "kind": "Eviction",
+                      "metadata": {"name": victim, "namespace": NS}})
+    if code == 429:
+        print(f"Eviction BLOCKED (HTTP 429): {resp.get('message')}")
+        finish(False, "a voluntary disruption is not possible; maintenance (node drain/upgrade) would stall")
+    if code >= 300:
+        finish(False, f"eviction request failed with HTTP {code}: {resp.get('message')}")
+    print(f"Eviction ACCEPTED (HTTP {code}); waiting for {APP} to return to {desired} ready replicas ...", flush=True)
+
+    recovered = False
+    deadline = time.time() + 180
+    while time.time() < deadline:
+        st = deployment().get("status", {})
+        names = [p["metadata"]["name"] for p in app_pods()]
+        if victim not in names and st.get("readyReplicas", 0) >= desired and st.get("availableReplicas", 0) >= desired:
+            recovered = True
+            break
+        time.sleep(3)
+    time.sleep(3)
+    if not recovered:
+        finish(False, f"{APP} did not return to {desired} ready replicas within 3 minutes")
+    if stats["failed"]:
+        finish(False, "the eviction was accepted but customer requests failed during the disruption")
+    finish(True, f"eviction accepted, no failed requests, {APP} back to {desired} ready replicas")
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: maintenance-check
+  namespace: a3-maintenance
+  labels:
+    kubecon.lab/challenge: a3
+spec:
+  schedule: "0 3 * * *"
+  suspend: true
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 420
+      template:
+        metadata:
+          labels:
+            app: maintenance-check
+            kubecon.lab/challenge: a3
+        spec:
+          serviceAccountName: maintenance-check
+          restartPolicy: Never
+          containers:
+            - name: check
+              image: mcr.microsoft.com/azurelinux/base/python:3.12
+              command: ["python3", "-u", "/app/check.py"]
+              volumeMounts:
+                - name: script
+                  mountPath: /app
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                limits:
+                  cpu: 250m
+                  memory: 128Mi
+              readinessProbe:
+                exec:
+                  command: ["true"]
+                periodSeconds: 10
+              livenessProbe:
+                exec:
+                  command: ["true"]
+                periodSeconds: 10
+          volumes:
+            - name: script
+              configMap:
+                name: maintenance-check-script
+---
+# The check that ran after the last deployment (the "pre-maintenance report").
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pre-maintenance-check
+  namespace: a3-maintenance
+  labels:
+    app: maintenance-check
+    kubecon.lab/challenge: a3
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 420
+  template:
+    metadata:
+      labels:
+        app: maintenance-check
+        kubecon.lab/challenge: a3
+    spec:
+      serviceAccountName: maintenance-check
+      restartPolicy: Never
+      containers:
+        - name: check
+          image: mcr.microsoft.com/azurelinux/base/python:3.12
+          command: ["python3", "-u", "/app/check.py"]
+          volumeMounts:
+            - name: script
+              mountPath: /app
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+          readinessProbe:
+            exec:
+              command: ["true"]
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["true"]
+            periodSeconds: 10
+      volumes:
+        - name: script
+          configMap:
+            name: maintenance-check-script

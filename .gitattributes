@@ -1,0 +1,8 @@
+# Keep shell scripts, manifests and Terraform with LF endings so they run in
+# Git Bash, WSL, Azure Cloud Shell and Linux lab VMs without "\r" errors.
+* text=auto eol=lf
+*.ps1 text eol=crlf
+*.psm1 text eol=crlf
+*.psd1 text eol=crlf
+*.docx binary
+*.png binary
