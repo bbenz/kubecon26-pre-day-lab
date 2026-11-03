@@ -25,16 +25,24 @@ ctf_ensure_cluster() {
   elif [ "$CTF_SKIP_INFRA" = true ]; then
     die "Cluster $CLUSTER_NAME not found (remove --skip-infra)"
   else
+    ctf_ensure_monitor_workspaces
     log_info "Creating the cluster - this typically takes 10-15 minutes ..."
-    # --sku automatic          : AKS Automatic (NAP, Cilium, Azure RBAC, deployment safeguards, ...)
+    # --sku automatic          : AKS Automatic (NAP, Cilium, Azure RBAC, deployment safeguards,
+    #                            Managed Prometheus, Container Insights, ...)
     # --enable-hosted-system   : managed system node pool (system components run on AKS-managed nodes)
-    # --enable-gateway-api     : managed Gateway API CRDs (challenge C2)
+    # --enable-app-routing     : application routing add-on with managed NGINX (C2 starts on Ingress-NGINX)
+    # --enable-gateway-api     : managed Gateway API CRDs (C2 migrates to Gateway API)
     # --enable-app-routing-istio: Istio-based Gateway API implementation of the application routing add-on
+    # --azure-monitor-workspace-resource-id / --workspace-resource-id: keep Managed Prometheus
+    #                            and Container Insights data in the lab resource group (A2 dashboards)
+    #                            instead of default workspaces in DefaultResourceGroup-<region>
     # --no-ssh-key             : otherwise the CLI sends ~/.ssh/id_rsa.pub when it exists, which AKS rejects
     #                            for Automatic clusters with managed system node pools (BadRequest)
     az_core aks create -g "$RESOURCE_GROUP" -n "$CLUSTER_NAME" -l "$LOCATION" \
       --sku automatic --enable-hosted-system --no-ssh-key \
-      --enable-gateway-api --enable-app-routing-istio \
+      --enable-app-routing --enable-gateway-api --enable-app-routing-istio \
+      --enable-azure-monitor-metrics --azure-monitor-workspace-resource-id "$AMW_ID" \
+      --workspace-resource-id "$LAW_ID" \
       --tags purpose=kubecon-ctf "lab-state=$LAB_STATE" \
       --only-show-errors -o none \
       || die "az aks create failed. Check region support for AKS Automatic and vCPU quota (see docs/prerequisites.md)."
@@ -42,6 +50,26 @@ ctf_ensure_cluster() {
   fi
   AKS_ID=$(az_tsv aks show -g "$RESOURCE_GROUP" -n "$CLUSTER_NAME" --query id)
   OIDC_ISSUER=$(az_tsv aks show -g "$RESOURCE_GROUP" -n "$CLUSTER_NAME" --query oidcIssuerProfile.issuerUrl)
+}
+
+# Azure Monitor workspace (Managed Prometheus metrics) and, unless "metrics-only"
+# is passed, a Log Analytics workspace (Container Insights) in the lab resource
+# group. Sets AMW_ID and LAW_ID. Without explicit workspaces the Azure CLI uses
+# default workspaces in DefaultResourceGroup-<region>, outside the lab resource group.
+ctf_ensure_monitor_workspaces() {
+  if ! az monitor account show -g "$RESOURCE_GROUP" -n "$AMW_NAME" -o none 2>/dev/null; then
+    az monitor account create -g "$RESOURCE_GROUP" -n "$AMW_NAME" -l "$LOCATION" --only-show-errors -o none \
+      || die "Could not create the Azure Monitor workspace $AMW_NAME"
+    log_ok "created Azure Monitor workspace $AMW_NAME (Managed Prometheus)"
+  fi
+  AMW_ID=$(az_tsv monitor account show -g "$RESOURCE_GROUP" -n "$AMW_NAME" --query id)
+  [ "${1:-}" = metrics-only ] && return 0
+  if ! az monitor log-analytics workspace show -g "$RESOURCE_GROUP" -n "$LAW_NAME" -o none 2>/dev/null; then
+    az monitor log-analytics workspace create -g "$RESOURCE_GROUP" -n "$LAW_NAME" -l "$LOCATION" \
+      --only-show-errors -o none || die "Could not create the Log Analytics workspace $LAW_NAME"
+    log_ok "created Log Analytics workspace $LAW_NAME (Container Insights)"
+  fi
+  LAW_ID=$(az_tsv monitor log-analytics workspace show -g "$RESOURCE_GROUP" -n "$LAW_NAME" --query id)
 }
 
 # Sets CTF_PRINCIPAL_ID / CTF_PRINCIPAL_TYPE for the signed-in user or service principal.
@@ -104,9 +132,21 @@ ctf_get_credentials() {
   die "kubectl still has no cluster-admin access after 10 minutes. Check the '$CTF_AKS_ADMIN_ROLE' role assignment."
 }
 
-ctf_ensure_gateway_api() {
+# C2: application routing add-on - managed NGINX (the Ingress-NGINX path the
+# storefront starts on) and its Istio-based Gateway API implementation
+# (approuting-istio, the path participants migrate the storefront to).
+ctf_ensure_app_routing() {
   ctf_selected c2 || return 0
-  log_step "Gateway API (application routing add-on, Istio implementation)"
+  log_step "C2: application routing add-on (managed NGINX + Gateway API with approuting-istio)"
+  if ! k get ingressclass webapprouting.kubernetes.azure.com >/dev/null 2>&1; then
+    [ "$CTF_SKIP_INFRA" = true ] && die "IngressClass webapprouting.kubernetes.azure.com is missing (remove --skip-infra)"
+    log_info "Enabling the application routing add-on with managed NGINX (a few minutes) ..."
+    az_core aks approuting enable -g "$RESOURCE_GROUP" -n "$CLUSTER_NAME" --only-show-errors -o none \
+      || die "az aks approuting enable failed"
+  fi
+  retry 40 15 k get ingressclass webapprouting.kubernetes.azure.com >/dev/null 2>&1 \
+    || die "IngressClass webapprouting.kubernetes.azure.com did not appear"
+  log_ok "IngressClass webapprouting.kubernetes.azure.com (managed NGINX) available"
   if ! k get gatewayclass approuting-istio >/dev/null 2>&1; then
     [ "$CTF_SKIP_INFRA" = true ] && die "GatewayClass approuting-istio is missing (remove --skip-infra)"
     log_info "Enabling managed Gateway API CRDs and the approuting-istio GatewayClass (a few minutes) ..."
@@ -115,6 +155,25 @@ ctf_ensure_gateway_api() {
   fi
   retry 40 15 k get gatewayclass approuting-istio >/dev/null 2>&1 || die "GatewayClass approuting-istio did not appear"
   log_ok "GatewayClass approuting-istio available"
+}
+
+# A2: Managed Prometheus, for the "Dashboards with Grafana" CPU throttling view.
+# Clusters created by these scripts already send metrics to the lab's Azure
+# Monitor workspace; an existing cluster without metrics is connected to it.
+ctf_ensure_prometheus() {
+  ctf_selected a2 || return 0
+  log_step "A2: Azure Monitor managed service for Prometheus"
+  if [ "$(az_tsv aks show -g "$RESOURCE_GROUP" -n "$CLUSTER_NAME" --query azureMonitorProfile.metrics.enabled)" = "true" ]; then
+    log_ok "Managed Prometheus metrics already enabled"
+    return 0
+  fi
+  [ "$CTF_SKIP_INFRA" = true ] && die "Managed Prometheus is not enabled on $CLUSTER_NAME (remove --skip-infra)"
+  ctf_ensure_monitor_workspaces metrics-only
+  log_info "Enabling Managed Prometheus (Azure Monitor workspace $AMW_NAME) - a few minutes ..."
+  az_core aks update -g "$RESOURCE_GROUP" -n "$CLUSTER_NAME" --enable-azure-monitor-metrics \
+    --azure-monitor-workspace-resource-id "$AMW_ID" --only-show-errors -o none \
+    || die "az aks update --enable-azure-monitor-metrics failed"
+  log_ok "Managed Prometheus metrics enabled ($AMW_NAME)"
 }
 
 # ctf_ensure_identity <name>  -> sets IDENTITY_CLIENT_ID and IDENTITY_PRINCIPAL_ID

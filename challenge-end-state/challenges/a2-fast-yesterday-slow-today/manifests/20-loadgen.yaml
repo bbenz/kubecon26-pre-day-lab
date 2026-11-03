@@ -1,5 +1,9 @@
-# loadgen: runs the fixed, bounded checkout load test on demand:
+# loadgen: sends steady background "customer" checkout traffic (about one
+# checkout per second - visible in Managed Prometheus / the Grafana dashboards
+# and summarized in the pod log every 30 s) and runs the fixed, bounded
+# checkout load test on demand:
 #   kubectl exec -n a2-checkout deploy/loadgen -- python3 /app/loadtest.py
+#   kubectl logs -n a2-checkout deploy/loadgen --tail=5
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -53,6 +57,88 @@ data:
                "objective_p95_ms": TARGET_P95_MS, "result": "PASS" if passed else "FAIL"}
     print(json.dumps(summary), flush=True)
     sys.exit(0 if passed else 1)
+  loadgen.py: |
+    # Steady background "customer" traffic: about BACKGROUND_RPS checkouts per
+    # second (open loop, at most MAX_IN_FLIGHT outstanding - extra arrivals are
+    # dropped and counted, never queued), plus a tiny web server for the probes.
+    import concurrent.futures, os, threading, time, urllib.request
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    TARGET = "http://checkout-api:8080/checkout"
+    RATE = float(os.environ.get("BACKGROUND_RPS", "1"))
+    MAX_IN_FLIGHT = 4
+    TIMEOUT_S = 10
+    REPORT_EVERY_S = 30
+
+
+    class Health(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"ok")
+
+        def log_message(self, fmt, *args):
+            pass
+
+
+    threading.Thread(target=ThreadingHTTPServer(("", 8080), Health).serve_forever, daemon=True).start()
+
+    lock = threading.Lock()
+    in_flight = 0
+    window = []
+
+
+    def one(i):
+        global in_flight
+        t0 = time.perf_counter()
+        try:
+            with urllib.request.urlopen(f"{TARGET}?order=bg-{i}", timeout=TIMEOUT_S) as r:
+                r.read()
+                ok = r.status == 200
+        except Exception:
+            ok = False
+        with lock:
+            in_flight -= 1
+            window.append((ok, (time.perf_counter() - t0) * 1000))
+
+
+    def pct(values, p):
+        values = sorted(values)
+        return values[max(0, min(len(values) - 1, int(round(p / 100 * len(values) + 0.5)) - 1))]
+
+
+    print(f"background checkout traffic: ~{RATE:g}/s to {TARGET} (max {MAX_IN_FLIGHT} in flight); "
+          f"summary every {REPORT_EVERY_S} s", flush=True)
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=MAX_IN_FLIGHT)
+    sent = dropped = 0
+    next_at = last_report = time.monotonic()
+    while True:
+        with lock:
+            free = in_flight < MAX_IN_FLIGHT
+            if free:
+                in_flight += 1
+        if free:
+            pool.submit(one, sent)
+            sent += 1
+        else:
+            dropped += 1
+        next_at += 1 / RATE
+        now = time.monotonic()
+        if now - last_report >= REPORT_EVERY_S:
+            with lock:
+                done, window = window, []
+            lat = [ms for ok, ms in done if ok]
+            errors = sum(1 for ok, _ in done if not ok)
+            if lat:
+                latency = f"p50 {pct(lat, 50):.0f} ms, p95 {pct(lat, 95):.0f} ms"
+            else:
+                latency = "no successful responses"
+            print(f"last {now - last_report:.0f} s: {len(done)} checkouts, {latency}, errors {errors}, "
+                  f"dropped (too many in flight) {dropped}", flush=True)
+            dropped = 0
+            last_report = now
+        time.sleep(max(0.0, next_at - time.monotonic()))
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -76,9 +162,12 @@ spec:
       containers:
         - name: loadgen
           image: mcr.microsoft.com/azurelinux/base/python:3.12
-          # Idle web server keeps the pod running (and gives the probes something
-          # to check); the load test itself is started on demand with kubectl exec.
-          command: ["python3", "-m", "http.server", "8080", "--directory", "/app"]
+          # Background traffic + probe endpoint; the load test itself is started
+          # on demand with kubectl exec.
+          command: ["python3", "-u", "/app/loadgen.py"]
+          env:
+            - name: BACKGROUND_RPS
+              value: "1"
           ports:
             - containerPort: 8080
           volumeMounts:

@@ -5,7 +5,8 @@
 ```mermaid
 flowchart LR
   subgraph RG["Resource group (one per environment)"]
-    AKS["AKS Automatic cluster<br/>managed system node pool · NAP · Cilium<br/>Azure RBAC · safeguards · LocalDNS<br/>Gateway API (approuting-istio)"]
+    AKS["AKS Automatic cluster<br/>managed system node pool · NAP · Cilium<br/>Azure RBAC · safeguards · LocalDNS<br/>application routing: managed NGINX + Gateway API (approuting-istio)<br/>Managed Prometheus"]
+    AMW["Azure Monitor workspace amw-ctf-id<br/>(Managed Prometheus metrics, A2 dashboards)"]
     FDY["Microsoft Foundry account<br/>model deployment store-assistant<br/>(C4 only)"]
     KV["Key Vault + secret lab-config<br/>(A4 only)"]
     ID1["Managed identity id-ctf-ai-service<br/>+ federated credential (C4)"]
@@ -16,6 +17,7 @@ flowchart LR
     A1[a1-inventory] --- A2[a2-checkout] --- A3[a3-maintenance] --- A4[a4-config] --- A5[a5-releases] --- A6[a6-records]
   end
   AKS --> K8S
+  AKS -. metrics .-> AMW
   C4 -. workload identity .-> ID1 -. Cognitive Services OpenAI User .-> FDY
   A4 -. workload identity .-> ID2 -. Key Vault Secrets User on one secret .-> KV
 ```
@@ -45,7 +47,7 @@ Both states deploy the same platform; only the challenge layer differs:
 |---|---|---|---|
 | Entry points | `<state>/azure-cli-bash/deploy.sh`, `cleanup.sh` | `<state>/azure-cli-powershell/deploy.ps1`, `cleanup.ps1` | `<state>/terraform` root module |
 | Shared code | `shared/azure-cli-bash/lib/*.sh` | `shared/azure-cli-powershell/CtfLab.psm1` | `shared/terraform/modules/lab-platform`, `lab-challenge` |
-| AKS Automatic | `az aks create --sku automatic --enable-hosted-system --no-ssh-key --enable-gateway-api --enable-app-routing-istio` | same | `azapi_resource` `Microsoft.ContainerService/managedClusters@2026-05-01` with the equivalent body |
+| AKS Automatic | `az aks create --sku automatic --enable-hosted-system --no-ssh-key --enable-app-routing --enable-gateway-api --enable-app-routing-istio --enable-azure-monitor-metrics --azure-monitor-workspace-resource-id <amw> --workspace-resource-id <law>` | same | `azapi_resource` `Microsoft.ContainerService/managedClusters@2026-05-01` with the equivalent body, plus the Managed Prometheus data collection resources (`monitoring.tf`, `monitoring-rules.tf`) |
 | Kubernetes objects | `kubectl apply -f` of rendered manifests | same | `alekc/kubectl` `kubectl_manifest` (server-side apply) per YAML document |
 | Kubernetes auth | `az aks get-credentials` + `kubelogin convert-kubeconfig -l azurecli` | same | kubectl provider `exec` → `kubelogin get-token --login azurecli` |
 | State | idempotent re-runs (create-if-missing) | same | Terraform state per folder |
@@ -55,19 +57,51 @@ Both states deploy the same platform; only the challenge layer differs:
 1. Resource group.
 2. *Azure Kubernetes Service RBAC Cluster Admin* for the signed-in principal on the resource group – before the
    cluster exists, so it has propagated when the cluster is ready (AKS Automatic disables local accounts).
-3. AKS Automatic cluster (10–15 min).
+3. AKS Automatic cluster (10–15 min). The CLI deployments first create the Azure Monitor and Log Analytics
+   workspaces it reports to.
 4. kubectl credentials; wait until `kubectl auth can-i '*' '*'` succeeds.
-5. Challenge-specific Azure services: Gateway API check (C2), Foundry + identity (C4), Key Vault + identity (A4).
+5. Challenge-specific Azure services: application routing add-on with managed NGINX and Gateway API (C2; enabled on
+   an existing cluster if missing), Managed Prometheus (A2; enabled on an existing cluster if missing), Foundry +
+   identity (C4), Key Vault + identity (A4).
 6. For each selected challenge: render placeholders → (begin state: delete the challenge's namespace/NodePool) →
    namespace → **setup phase** (objects labelled `kubecon.lab/phase: setup`, e.g. A6's disk and seed Job, waited
-   for) → everything else. Within a challenge, objects that pods depend on (Services, ConfigMaps, policies, ...)
+   for) → everything else → (scripts: delete the objects listed in the challenge's `prune.txt`, e.g. C2's legacy
+   Ingress in the end state). Within a challenge, objects that pods depend on (Services, ConfigMaps, policies, ...)
    are created before the workloads: by the numbered file names with `kubectl`, and by a separate `workloads` phase
    in the Terraform `lab-challenge` module (Terraform would otherwise create everything in parallel).
 
-Monitoring differs by approach: `az aks create --sku automatic` enables Container Insights and Managed Prometheus
-client-side and, without `--workspace-resource-id`, creates a Log Analytics workspace in
-`DefaultResourceGroup-<region>` (outside the lab resource group; not removed by the cleanup scripts). The Terraform
-(azapi) cluster has no monitoring add-ons. No challenge depends on monitoring.
+### Ingress and Gateway API (C2)
+
+The application routing add-on provides both front doors C2 needs, side by side:
+
+| | Managed NGINX (migration source) | Gateway API (migration target) |
+|---|---|---|
+| Class | IngressClass `webapprouting.kubernetes.azure.com` | GatewayClass `approuting-istio` |
+| Data plane | Shared NGINX controller (`app-routing-system/nginx`, one public IP for all Ingresses) | One Envoy deployment and Service `<gateway>-approuting-istio` per Gateway, in the Gateway's namespace, each with its own public IP |
+| Enabled by | `--enable-app-routing` / `az aks approuting enable` / azapi `ingressProfile.webAppRouting` | `--enable-gateway-api --enable-app-routing-istio` / azapi `ingressProfile.gatewayAPI` + `gatewayAPIImplementations.appRoutingIstio` |
+
+The storefront's public name `ctf-store-<id>.<region>.cloudapp.azure.com` is an Azure DNS label on a load
+balancer IP, requested with the Service annotation `service.beta.kubernetes.io/azure-dns-label-name` (for a
+Gateway: `spec.infrastructure.annotations`). In the begin state no Service carries it; the cutover adds it to the
+gateway.
+
+### Monitoring (A2)
+
+Every approach keeps monitoring in the lab resource group:
+
+* **Azure CLI:** `az aks create --sku automatic` turns on Managed Prometheus and Container Insights itself. The
+  scripts pass an Azure Monitor workspace (`amw-ctf-<id>`) and a Log Analytics workspace (`law-ctf-<id>`) they
+  create in the lab resource group; the CLI adds the data collection endpoint/rule (`MSProm-…`, `MSCI-…`) and the
+  recording rule groups there too. On an existing cluster without metrics, deploying A2 runs
+  `az aks update --enable-azure-monitor-metrics` with the lab workspace. (Clusters created by earlier versions of the
+  scripts report to `DefaultResourceGroup-<region>`.)
+* **Terraform:** the cluster body enables the metrics agent (`azureMonitorProfile.metrics`); `monitoring.tf` adds the
+  Azure Monitor workspace, data collection endpoint, rule and association, and `monitoring-rules.tf` the Node,
+  Kubernetes and UX recording rules (from the official Terraform onboarding template). No Container Insights (logs).
+
+Participants use the metrics through the cluster's **Monitoring → Dashboards with Grafana** page in the Azure portal
+(no Grafana instance to deploy). Like the cluster's `MC_…` node resource group, an Azure Monitor workspace has a
+managed resource group (`MA_<workspace>_<region>_managed`) that Azure creates and deletes together with it.
 
 ### Placeholders
 
@@ -88,6 +122,7 @@ Manifests contain a few `__TOKEN__` placeholders, replaced at deploy time by eve
 | Resource group | `rg-kubecon-ctf-{begin,end}-{bash,pwsh,tf}` (override with options) |
 | AKS cluster / kubectl context | `aks-` + resource group without `rg-` |
 | Foundry account, Key Vault, storefront DNS label | `aoai-ctf-<id>`, `kv-ctf-<id>`, `ctf-store-<id>` |
+| Azure Monitor / Log Analytics workspaces | `amw-ctf-<id>` / `law-ctf-<id>` (Log Analytics: Azure CLI deployments only) |
 | Managed identities | `id-ctf-ai-service`, `id-ctf-config-reader` |
 
 `<id>` = the first 6 hex characters of `sha1("<subscription-id>/<resource-group>")` – identical in bash,

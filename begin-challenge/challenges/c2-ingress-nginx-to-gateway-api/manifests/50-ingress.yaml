@@ -1,0 +1,28 @@
+# The storefront's current front door: an Ingress served by the managed NGINX of
+# the AKS application routing add-on (IngressClass webapprouting.kubernetes.azure.com).
+# Microsoft-supported security patches for it end in November 2026 - the
+# challenge is to move this traffic to Gateway API (see README.md).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: storefront
+  namespace: c2-storefront
+  labels:
+    kubecon.lab/challenge: c2
+  annotations:
+    kubecon.lab/change-ticket: "CHG-0731 - publish the storefront through the application routing add-on (managed NGINX)"
+    # Checkouts can be slow: give the storefront up to 2 minutes to answer.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+spec:
+  ingressClassName: webapprouting.kubernetes.azure.com
+  rules:
+    - host: "__STOREFRONT_HOSTNAME__"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: store-front
+                port:
+                  number: 80

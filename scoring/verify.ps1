@@ -35,6 +35,7 @@ if (-not $Context) { Write-Error 'No kubectl context; pass -Context'; exit 2 }
 
 $script:Kctx = $Context
 $script:ObserveSeconds = if ($Quick) { 15 } else { 60 }
+$script:QuickMode = [bool]$Quick
 $script:LongWait = if ($Quick) { 90 } else { 420 }
 $script:RolloutTimeout = if ($Quick) { 45 } else { 240 }
 $script:ChPass = 0
@@ -74,6 +75,17 @@ function Get-Prop($Object, [string]$Path) {
     }
     return $cur
 }
+function Get-Key($Object, [string]$Key) {
+    # Safe access to one property whose name may contain dots (label and annotation keys).
+    if ($null -eq $Object) { return $null }
+    $p = $Object.PSObject.Properties[$Key]
+    if ($p) { return $p.Value } else { return $null }
+}
+# Status of condition <Type> in a Kubernetes conditions array, or ''.
+function Get-ConditionStatus($Conditions, [string]$Type) {
+    $c = @($Conditions | Where-Object { $null -ne $_ -and (Get-Prop $_ 'type') -eq $Type }) | Select-Object -First 1
+    if ($c) { return [string](Get-Prop $c 'status') } else { return '' }
+}
 function Test-Rollout([string]$Namespace, [string]$Deployment) {
     & kubectl --context $script:Kctx rollout status "deployment/$Deployment" -n $Namespace "--timeout=$($script:RolloutTimeout)s" *> $null
     return ($LASTEXITCODE -eq 0)
@@ -106,7 +118,7 @@ function Wait-K8sJob([string]$Namespace, [string]$Job, [int]$TimeoutSeconds) {
 . (Join-Path $PSScriptRoot 'lib/VerifyAlternates.ps1')
 
 $all = [ordered]@{
-    c1 = @('c1-store', "C1 The store won't start");             c2 = @('c2-storefront', 'C2 Healthy pods, broken storefront')
+    c1 = @('c1-store', "C1 The store won't start");             c2 = @('c2-storefront', 'C2 Move the storefront to Gateway API')
     c3 = @('c3-processing', 'C3 Capacity that never arrives');     c4 = @('c4-assistant', 'C4 The AI assistant is up, but not working')
     a1 = @('a1-inventory', 'A1 Where did DNS go?');                a2 = @('a2-checkout', 'A2 Fast yesterday, slow today')
     a3 = @('a3-maintenance', 'A3 Ready for maintenance?');         a4 = @('a4-config', 'A4 Identity without secrets')

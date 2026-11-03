@@ -36,8 +36,13 @@ output "kube_cluster_ca_certificate" {
 }
 
 output "storefront_hostname" {
-  description = "Public hostname of the C2 storefront gateway."
+  description = "Public hostname of the C2 storefront (published by the Gateway API gateway after the migration)."
   value       = local.storefront_hostname
+}
+
+output "monitor_workspace_id" {
+  description = "Azure Monitor workspace that receives the cluster's Managed Prometheus metrics."
+  value       = azurerm_monitor_workspace.lab.id
 }
 
 # Values substituted into the challenge manifests (placeholders __NAME__).

@@ -222,6 +222,8 @@ ctf_compute_names() {
   CONFIG_IDENTITY_NAME="id-ctf-config-reader"
   STOREFRONT_DNS_LABEL="ctf-store-${CTF_SUFFIX}"
   STOREFRONT_HOSTNAME="${STOREFRONT_DNS_LABEL}.${LOCATION}.cloudapp.azure.com"
+  AMW_NAME="amw-ctf-${CTF_SUFFIX}"
+  LAW_NAME="law-ctf-${CTF_SUFFIX}"
   KUBE_CONTEXT="$CLUSTER_NAME"
   RENDER_DIR="$REPO_ROOT/.lab/rendered/$RESOURCE_GROUP"
   log_info "Resource group $RESOURCE_GROUP, cluster $CLUSTER_NAME, region $LOCATION"

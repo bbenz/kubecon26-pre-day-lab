@@ -23,8 +23,13 @@ output "connect" {
 }
 
 output "storefront_url" {
-  description = "C2 storefront through the Gateway API gateway (when c2 is deployed)."
+  description = "C2: the storefront's public URL after the migration. It resolves once the Gateway API gateway publishes the DNS label (the cutover); until then the storefront is reached through Ingress-NGINX (see the C2 README)."
   value       = contains(local.selected, "c2") ? "http://${module.platform.storefront_hostname}/" : null
+}
+
+output "a2_dashboards" {
+  description = "A2: where to see CPU throttling (Managed Prometheus)."
+  value       = contains(local.selected, "a2") ? "Azure portal > ${module.platform.cluster_name} > Monitoring > Dashboards with Grafana > Kubernetes / Compute Resources / Pod (namespace a2-checkout)" : null
 }
 
 output "verify" {

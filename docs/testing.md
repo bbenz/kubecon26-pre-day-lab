@@ -9,7 +9,7 @@ Run from the repository root; each tool is optional – install what you have.
 shellcheck -x -P SCRIPTDIR $(git ls-files '*.sh')
 for f in $(git ls-files '*.sh'); do bash -n "$f"; done
 
-# Kubernetes manifests (placeholders are expected to fail the hostname pattern in C2's HTTPRoute)
+# Kubernetes manifests (placeholders are expected to fail the hostname pattern in C2's Ingress, Gateway and HTTPRoute)
 kubeconform -strict -summary -ignore-missing-schemas -kubernetes-version 1.35.0 \
   -schema-location default \
   -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
@@ -60,9 +60,10 @@ Allow ~60 s after applying for images to pull before verifying.
 Results recorded on 2026-10-13 (kind v0.33, Kubernetes 1.37): begin state → all six NOT PASSED with the intended
 symptoms; end state → all six PASSED with each approach; the commands in every `SOLUTION.md` converge to PASS.
 
-**Not covered locally** (need Azure): C2 (AKS Gateway API implementation), C3 (node auto-provisioning), C4 (Foundry),
-A4 (Entra workload identity), and AKS-specific behaviour of A1 (LocalDNS + Cilium), A2 (VM CPU speed) and A6 (Azure
-Disk attach).
+**Not covered locally** (need Azure): C2 (application routing add-on: managed NGINX and Gateway API, Azure DNS
+labels), C3 (node auto-provisioning), C4 (Foundry), A4 (Entra workload identity), and AKS-specific behaviour of A1
+(LocalDNS + Cilium), A2 (VM CPU speed, Managed Prometheus dashboards) and A6 (Azure Disk attach). On kind, A2's
+`loadgen` sends the same background traffic; only the dashboards are missing.
 
 ## 3. Azure pilot
 
@@ -75,3 +76,20 @@ Disk attach).
 First pilot (2026-10-14, westus3, AKS Automatic 1.35.8): begin state deployed with PowerShell and re-run with bash
 (idempotent, resets C1/C2/C4), end state with Terraform. Final results: begin – all ten NOT PASSED with the intended
 symptoms; end – all ten PASSED (bash and PowerShell verifiers). Findings and fixes are listed in FEASIBILITY.md.
+
+Second round (2026-11-03, westus3, AKS Automatic 1.36.4) – C2 redesign and A2 dashboards:
+
+* **Begin environment (CLI-created in October):** bash deploy `-c c2,a2` enabled the add-on's NGINX on the
+  existing cluster and reset both challenges; the C2 migration was walked through as a participant
+  (ingress2gateway 1.2.0 live and offline, AI-style adaptation, side-by-side tests, DNS cutover, decommissioning) and
+  A2 was fixed by hand – both PASSED with the bash and PowerShell verifiers. PowerShell begin deploy → NOT PASSED;
+  PowerShell end-state deploy in place (prune) → PASSED; bash begin deploy again to leave the environment in its
+  begin state.
+* **End environment (Terraform):** `terraform apply` added the Managed Prometheus resources and updated the cluster
+  in place (2.5 min; Automatic add-ons, OIDC and workload identity unchanged); a second plan showed no changes.
+  All ten challenges PASSED (C1 after restarting an `order-service` whose RabbitMQ had moved – see FEASIBILITY.md).
+* **Fresh create** (temporary resource group, PowerShell): the new `az aks create` flags work; all monitoring
+  resources landed in the lab resource group; removed with the bash cleanup script.
+* Managed Prometheus data (throttling ratio, CPU usage and the recording rules the dashboards use) was checked with
+  PromQL against each workspace. **Still to do by a reviewer:** open *Dashboards with Grafana* in the portal and
+  confirm the dashboard names and panels the A2 README refers to.

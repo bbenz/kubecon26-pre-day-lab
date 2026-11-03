@@ -48,9 +48,10 @@ If several people deploy into the same subscription, give each environment its o
 ./challenge-end-state/azure-cli-powershell/deploy.ps1 -ResourceGroup rg-kubecon-ctf-begin-pwsh -Challenges c1
 ```
 
-The end-state scripts apply on top of what is there (no reset unless `--reset` / `-Reset`). Re-running the
-begin-state deploy afterwards breaks the challenge again. With Terraform, keep begin and end in separate resource
-groups (each folder has its own state).
+The end-state scripts apply on top of what is there (no reset unless `--reset` / `-Reset`). Objects the end
+state no longer has are listed in a challenge's `prune.txt` and deleted after the apply (C2's legacy Ingress).
+Re-running the begin-state deploy afterwards breaks the challenge again. With Terraform, keep begin and end in
+separate resource groups (each folder has its own state).
 
 ## Verify
 
@@ -67,11 +68,11 @@ completes, and C4/A4 may need 1–5 minutes for new role assignments to propagat
 | ID | What changes from the begin state | Details |
 |---|---|---|
 | C1 | ConfigMap `FASTIFY_ADDRESS` → `0.0.0.0` (+ `FASTIFY_PORT: 3000`), new rollout | [README](challenges/c1-the-store-wont-start/README.md) |
-| C2 | HTTPRoute `backendRefs[0].port` 8080 → 80 | [README](challenges/c2-healthy-pods-broken-storefront/README.md) |
+| C2 | Ingress `storefront` (Ingress-NGINX) → Gateway `store-gateway` (`approuting-istio`) + HTTPRoute `storefront`; the public DNS name moves to the gateway; Ingress removed | [README](challenges/c2-ingress-nginx-to-gateway-api/README.md) |
 | C3 | NodePool approved SKUs: Arm64 → amd64 (v5/v6/v7) | [README](challenges/c3-capacity-that-never-arrives/README.md) |
 | C4 | `AZURE_OPENAI_DEPLOYMENT_NAME`: retired deployment → provisioned deployment | [README](challenges/c4-ai-assistant-up-but-not-working/README.md) |
 | A1 | NetworkPolicy: + DNS (UDP/TCP 53) to LocalDNS / kube-dns only | [README](challenges/a1-where-did-dns-go/README.md) |
-| A2 | `checkout-api` CPU limit 100m → 1 (request 500m) | [README](challenges/a2-fast-yesterday-slow-today/README.md) |
+| A2 | `checkout-api` CPU limit 100m → 1 (request 500m); throttling gone on the Managed Prometheus dashboards | [README](challenges/a2-fast-yesterday-slow-today/README.md) |
 | A3 | `inventory-api` replicas 1 → 2 (PDB unchanged) | [README](challenges/a3-ready-for-maintenance/README.md) |
 | A4 | Federated credential subject → `system:serviceaccount:a4-config:config-reader` | [README](challenges/a4-identity-without-secrets/README.md) |
 | A5 | Readiness `/healthz` → `/ready`, `maxUnavailable` 1 → 0 | [README](challenges/a5-running-is-not-ready/README.md) |
@@ -88,6 +89,8 @@ shows a fix exactly.
 cd challenge-end-state/terraform && terraform destroy
 ```
 
-The Azure CLI deployments also create (or reuse) `DefaultResourceGroup-<region>` with a Log Analytics workspace
-for Container Insights (`az aks create` monitoring defaults). It is shared by every CLI-created cluster in the
-subscription and is not deleted by the cleanup scripts – remove it yourself when nothing else uses it.
+Clusters created by the Azure CLI deployments keep their monitoring data in the lab resource group (Azure Monitor
+workspace `amw-ctf-<id>` for Managed Prometheus, Log Analytics workspace `law-ctf-<id>` for Container Insights),
+so the cleanup removes it. Clusters created by earlier versions of these scripts used the `az aks create` defaults
+instead: a shared `DefaultResourceGroup-<region>` that the cleanup scripts don't delete – remove it yourself when
+nothing else uses it.

@@ -1,0 +1,4 @@
+# Objects the end state removes from the challenge namespace when it is applied
+# on top of an existing begin-state deployment (Azure CLI scripts, no --reset):
+# one <resource>/<name> per line.
+ingress/storefront

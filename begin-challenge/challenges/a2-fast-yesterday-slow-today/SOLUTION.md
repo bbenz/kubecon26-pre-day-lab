@@ -1,21 +1,48 @@
 # A2 · Walkthrough to the end state (facilitators)
 
-> Spoilers. Re-measure the numbers below on the pilot cluster and update them.
+> Spoilers. Numbers below were measured on AKS Automatic 1.36 (westus3) on 2026-11-03, with the background
+> traffic running. Re-measure them on the event cluster.
 
 ## 1. Reproduce
 
 ```bash
 kubectl exec -n a2-checkout deploy/loadgen -- python3 /app/loadtest.py
-# {"requests": 120, "concurrency": 4, "errors": 0, "p50_ms": 991.2, "p95_ms": 1597.2, ..., "throughput_rps": 4.0, "result": "FAIL"}
+# {"requests": 120, "concurrency": 4, "errors": 0, "p50_ms": 1498.8, "p95_ms": 2593.8, ..., "duration_s": 48.1, "throughput_rps": 2.5, "result": "FAIL"}
 ```
 
 ## 2. Correlate latency with CPU and throttling
 
+**Customers' view** – the background traffic's latency, between tests and during a test:
+
+```bash
+kubectl logs -n a2-checkout deploy/loadgen --tail=2
+# last 30 s: 30 checkouts, p50 173 ms, p95 175 ms, errors 0, dropped (too many in flight) 0      <- no test running
+# last 31 s: 30 checkouts, p50 1670 ms, p95 2569 ms, errors 0, dropped (too many in flight) 0    <- during a test
+```
+
+**Managed Prometheus** – Azure portal → the AKS cluster → **Monitoring** → **Dashboards with Grafana** →
+**Kubernetes / Compute Resources / Pod** → namespace `a2-checkout`, pod `checkout-api-…` (last 30 minutes):
+
+* **CPU Usage** stays far below the limit line (about 0.03 of the 0.1 CPU limit) and touches the limit only
+  during a load test – "average usage looks fine".
+* **CPU Throttling** shows roughly half of the CPU periods throttled from the background traffic alone (62% over a
+  5-minute window that included a load test): each checkout needs ~30 ms of CPU but the container gets 10 ms per
+  100 ms period.
+
+The same ratio in PromQL (the cluster's Azure Monitor workspace → **Prometheus explorer**):
+
+```promql
+sum(rate(container_cpu_cfs_throttled_periods_total{namespace="a2-checkout", container="checkout-api"}[5m]))
+  / sum(rate(container_cpu_cfs_periods_total{namespace="a2-checkout", container="checkout-api"}[5m]))
+```
+
+**Command line** (instant, no metric delay):
+
 ```bash
 # terminal 2, while the test runs:
-kubectl top pod -n a2-checkout                 # checkout-api pinned at ~100m
+kubectl top pod -n a2-checkout                 # checkout-api ~27m between tests (a quarter of the limit), ~100m during one
 kubectl exec -n a2-checkout deploy/checkout-api -- curl -s localhost:8080/stats
-# {"cgroup_cpu_max": "10000 100000", "nr_periods": 555, "nr_throttled": 551, "throttled_seconds": 208.5, ...}
+# {"cgroup_cpu_max": "10000 100000", "nr_periods": 1797, "nr_throttled": 1127, "throttled_seconds": 211.7, ...}
 ```
 
 `cpu.max = 10000 100000` means 10 ms of CPU per 100 ms period = **0.1 CPU**. Nearly every period is throttled:
@@ -55,9 +82,14 @@ kubectl scale deployment/checkout-api -n a2-checkout --replicas=2
 
 ```bash
 kubectl exec -n a2-checkout deploy/loadgen -- python3 /app/loadtest.py
-# {"requests": 120, ..., "p50_ms": 97.5, "p95_ms": 106.7, ..., "result": "PASS"}
+# {"requests": 120, ..., "p50_ms": 107.9, "p95_ms": 186.4, ..., "duration_s": 3.8, "result": "PASS"}
+kubectl logs -n a2-checkout deploy/loadgen --tail=1    # background traffic: p50 ~36 ms
 scoring/verify.sh --challenges a2
 ```
+
+On the dashboard (2–3 minutes later) **CPU Throttling** drops to ~0 for the background traffic. A load test still
+shows some throttling – 4 concurrent checkouts want more than 1 CPU – but latency stays inside the objective:
+throttling is only a problem when it costs more than the latency budget.
 
 ## End state
 

@@ -39,7 +39,8 @@ ctf_ensure_cluster
 ctf_get_credentials
 
 # Azure services needed by individual challenges
-ctf_ensure_gateway_api   # C2: Gateway API (application routing add-on, Istio)
+ctf_ensure_app_routing   # C2: application routing add-on - managed NGINX + Gateway API (approuting-istio)
+ctf_ensure_prometheus    # A2: Managed Prometheus for the Grafana dashboards
 ctf_ensure_c4_azure      # C4: Foundry model deployment + ai-service workload identity
 ctf_ensure_a4_azure      # A4: Key Vault + identity; federated subject from challenges/a4-*/azure.env
 

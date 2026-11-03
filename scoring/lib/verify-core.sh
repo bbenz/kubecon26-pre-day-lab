@@ -43,38 +43,110 @@ verify_c1() {
   fi
 }
 
-# C2 - HTTPRoute backend port.
+# C2 - move the storefront from Ingress-NGINX (application routing add-on) to
+# Gateway API (application routing's approuting-istio implementation). The
+# participant names the Gateway and HTTPRoute, so they are discovered here.
 verify_c2() {
-  local ns=c2-storefront want host backend path accepted resolved ip code code2 lbs page
-  want=$(kj get gateway store-gateway -n "$ns" -o jsonpath='{.metadata.annotations.kubecon\.lab/storefront-hostname}')
-  host=$(kj get httproute storefront -n "$ns" -o jsonpath='{.spec.hostnames[*]}')
-  expect "route keeps the intended hostname" "$want" "$host"
-  backend=$(kj get httproute storefront -n "$ns" -o jsonpath='{.spec.rules[*].backendRefs[*].name}')
-  path=$(kj get httproute storefront -n "$ns" -o jsonpath='{.spec.rules[*].matches[*].path.type}:{.spec.rules[*].matches[*].path.value}')
-  expect "route still sends PathPrefix / to the store-front Service" "store-front PathPrefix:/" "$backend $path"
-  accepted=$(kj get httproute storefront -n "$ns" -o jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}')
-  resolved=$(kj get httproute storefront -n "$ns" -o jsonpath='{.status.parents[0].conditions[?(@.type=="ResolvedRefs")].status}')
-  expect "HTTPRoute status: Accepted / ResolvedRefs" "True/True" "$accepted/$resolved"
-  ip=$(kj get gateway store-gateway -n "$ns" -o jsonpath='{.status.addresses[0].value}')
-  if [ -z "$ip" ]; then
-    fail "gateway store-gateway has a public address"
-  elif ! command -v curl >/dev/null 2>&1; then
-    fail "curl is required to test the gateway"
+  local ns=c2-storefront host label gws gw g programmed ip annotated route_rows name parents hostnames \
+    route conditions rules code remote try page lbs ingresses tries code2
+  host=$(kj get namespace "$ns" -o jsonpath='{.metadata.annotations.kubecon\.lab/storefront-hostname}')
+  label=$(kj get namespace "$ns" -o jsonpath='{.metadata.annotations.kubecon\.lab/storefront-dns-label}')
+  if [ -z "$host" ] || [ -z "$label" ]; then
+    fail "storefront hostname known (namespace annotations kubecon.lab/storefront-hostname and -dns-label)"
+    return
+  fi
+  # 1. A gateway of the AKS application routing Gateway API class, programmed.
+  #    Prefer the one that carries the storefront's DNS label.
+  gws=$(kj get gateways.gateway.networking.k8s.io -n "$ns" \
+    -o jsonpath='{range .items[?(@.spec.gatewayClassName=="approuting-istio")]}{.metadata.name}{" "}{end}')
+  gw=""; ip=""
+  for g in $gws; do
+    [ -z "$gw" ] && gw=$g
+    if [ "$(kj get gateway "$g" -n "$ns" -o jsonpath='{.spec.infrastructure.annotations.service\.beta\.kubernetes\.io/azure-dns-label-name}')" = "$label" ]; then
+      gw=$g; break
+    fi
+  done
+  if [ -z "$gw" ]; then
+    fail "a Gateway of class approuting-istio exists in $ns (application routing Gateway API implementation)"
+    detail "gateways found: $(kj get gateways.gateway.networking.k8s.io -n "$ns" -o jsonpath='{range .items[*]}{.metadata.name}({.spec.gatewayClassName}) {end}')"
   else
-    page=$(mktemp)
-    code=$(curl -s -o "$(npath "$page")" -w '%{http_code}' -m 15 -H "Host: $want" "http://$ip/")
-    if [ "$code" = "200" ] && grep -q 'Contoso Pet Store' "$page"; then
-      pass "storefront served through the gateway: http://$want/ -> HTTP $code"
+    programmed=$(kj get gateway "$gw" -n "$ns" -o jsonpath='{.status.conditions[?(@.type=="Programmed")].status}')
+    ip=$(kj get gateway "$gw" -n "$ns" -o jsonpath='{.status.addresses[0].value}')
+    if [ "$programmed" = "True" ] && [ -n "$ip" ]; then
+      pass "Gateway $gw (approuting-istio) is programmed with public address $ip"
     else
-      fail "storefront served through the gateway: http://$want/ -> HTTP $code (gateway $ip)"
+      fail "Gateway $gw (approuting-istio) is programmed with a public address (Programmed=${programmed:-unknown})"
+    fi
+    annotated=$(kj get gateway "$gw" -n "$ns" -o jsonpath='{.spec.infrastructure.annotations.service\.beta\.kubernetes\.io/azure-dns-label-name}')
+    expect "gateway publishes the storefront's DNS name (infrastructure annotation azure-dns-label-name)" "$label" "$annotated"
+  fi
+  # 2. An HTTPRoute attached to that gateway, accepted, for the storefront hostname.
+  route=""
+  route_rows=$(kj get httproutes.gateway.networking.k8s.io -n "$ns" \
+    -o jsonpath='{range .items[*]}{.metadata.name}|{.spec.parentRefs[*].name}|{.spec.hostnames[*]}{"\n"}{end}')
+  if [ -n "$gw" ]; then
+    while IFS='|' read -r name parents hostnames; do
+      [ -n "$name" ] || continue
+      case " $parents " in *" $gw "*) ;; *) continue ;; esac
+      case " $hostnames " in *" $host "*) route=$name; break ;; esac
+    done <<EOF
+$route_rows
+EOF
+  fi
+  if [ -z "$route" ]; then
+    fail "an HTTPRoute attached to the gateway serves $host"
+    detail "routes found (name|parents|hostnames): $(printf '%s' "$route_rows" | tr '\n' ' ')"
+  else
+    conditions=$(kj get httproute "$route" -n "$ns" \
+      -o jsonpath="{range .status.parents[?(@.parentRef.name==\"$gw\")]}{.conditions[?(@.type==\"Accepted\")].status}/{.conditions[?(@.type==\"ResolvedRefs\")].status}{end}")
+    expect "HTTPRoute $route attached to $gw for $host: Accepted / ResolvedRefs" "True/True" "$conditions"
+    rules=$(kj get httproute "$route" -n "$ns" \
+      -o jsonpath='{range .spec.rules[*]}{range .matches[*]}{.path.type}:{.path.value}{end}>{range .backendRefs[*]}{.name}:{.port}{end};{end}')
+    case ";$rules" in
+      *";PathPrefix:/>store-front:80;"*|*";>store-front:80;"*) pass "route sends PathPrefix / to the store-front Service on port 80" ;;
+      *) fail "route sends PathPrefix / to the store-front Service on port 80"; detail "rules: $rules" ;;
+    esac
+  fi
+  # 3. The public name now reaches the store through the gateway (the cutover).
+  if ! command -v curl >/dev/null 2>&1; then
+    fail "curl is required to test the storefront"
+  elif [ -n "$gw" ] && [ -n "$ip" ]; then
+    page=$(mktemp)
+    tries=$([ "$QUICK" = true ] && echo 2 || echo 6)
+    try=1
+    while :; do
+      code=$(curl -s -o "$(npath "$page")" -w '%{http_code} %{remote_ip}' -m 15 "http://$host/" 2>/dev/null)
+      remote=${code#* }; code=${code%% *}
+      if [ "$code" = "200" ] && [ "$remote" = "$ip" ] && grep -q 'Contoso Pet Store' "$page"; then break; fi
+      [ "$try" -ge "$tries" ] && break
+      try=$((try + 1)); sleep 10
+    done
+    if [ "$code" = "200" ] && [ "$remote" = "$ip" ] && grep -q 'Contoso Pet Store' "$page"; then
+      pass "storefront served at http://$host/ through the gateway (DNS -> $ip, HTTP 200)"
+    elif [ "$code" = "000" ] || [ -z "$remote" ]; then
+      fail "storefront served at http://$host/ through the gateway"
+      detail "the name does not resolve or answer yet - publish the DNS label on the gateway (cutover); new labels take up to a minute"
+    else
+      fail "storefront served at http://$host/ through the gateway (HTTP $code from ${remote:-?}, gateway $ip)"
     fi
     rm -f "$page"
     code2=$(curl -s -o /dev/null -w '%{http_code}' -m 15 -H "Host: not-the-store.example" "http://$ip/")
-    expect "requests that do not match the route are not sent to the store (HTTP status)" "404" "$code2"
+    expect "requests for other host names are not sent to the store (HTTP status at the gateway)" "404" "$code2"
+  else
+    fail "storefront served at http://$host/ through the gateway (no programmed gateway)"
+  fi
+  # 4. Ingress-NGINX decommissioned for the storefront, nothing exposed around the gateway.
+  ingresses=$(kj get ingresses -n "$ns" -o jsonpath='{range .items[*]}{.metadata.name}({.spec.ingressClassName}) {end}')
+  ingresses=${ingresses% }
+  if [ -z "$ingresses" ]; then
+    pass "legacy Ingress-NGINX path decommissioned (no Ingress left in $ns)"
+  else
+    fail "legacy Ingress-NGINX path decommissioned (Ingress still present: $ingresses)"
   fi
   expect "store-front is not exposed directly (Service type)" "ClusterIP" "$(kj get service store-front -n "$ns" -o jsonpath='{.spec.type}')"
   lbs=$(kj get services -n "$ns" -o jsonpath='{range .items[?(@.spec.type=="LoadBalancer")]}{.metadata.name}{" "}{end}')
-  if ! printf '%s' "$lbs" | tr ' ' '\n' | grep -v '^store-gateway' | grep -q .; then
+  lbs=${lbs% }
+  if ! printf '%s' "$lbs" | tr ' ' '\n' | grep -v -- '-approuting-istio$' | grep -q .; then
     pass "no extra public endpoints in the namespace (LoadBalancer services: ${lbs:-none})"
   else
     fail "no extra public endpoints in the namespace (LoadBalancer services: $lbs)"

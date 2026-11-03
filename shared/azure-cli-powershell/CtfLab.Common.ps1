@@ -190,6 +190,8 @@ function Test-CtfPrerequisites {
     $script:Ctf.ConfigIdentityName = 'id-ctf-config-reader'
     $script:Ctf.StorefrontDnsLabel = "ctf-store-$suffix"
     $script:Ctf.StorefrontHostname = "ctf-store-$suffix.$($script:Ctf.Location).cloudapp.azure.com"
+    $script:Ctf.AmwName = "amw-ctf-$suffix"
+    $script:Ctf.LawName = "law-ctf-$suffix"
     $script:Ctf.RenderDir = Join-Path $script:Ctf.RepoRoot ".lab/rendered/$($script:Ctf.ResourceGroup)"
     Write-CtfInfo "Resource group $($script:Ctf.ResourceGroup), cluster $($script:Ctf.ClusterName), region $($script:Ctf.Location)"
     Write-CtfInfo "Challenges ($($script:Ctf.State) state): $($script:Ctf.Challenges -join ' ')"

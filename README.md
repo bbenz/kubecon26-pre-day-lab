@@ -30,11 +30,11 @@ FEASIBILITY.md            feasibility summary and recommended line-up
 | ID | Challenge | Topic | Namespace |
 |---|---|---|---|
 | C1 | [The store won't start](begin-challenge/challenges/c1-the-store-wont-start/README.md) | CrashLoopBackOff, previous logs, ConfigMaps | `c1-store` |
-| C2 | [Healthy pods, broken storefront](begin-challenge/challenges/c2-healthy-pods-broken-storefront/README.md) | Gateway API (app routing, Istio), Service ports | `c2-storefront` |
+| C2 | [Move the storefront to Gateway API](begin-challenge/challenges/c2-ingress-nginx-to-gateway-api/README.md) | Ingress-NGINX → Gateway API migration (application routing add-on, ingress2gateway, AI-assisted) | `c2-storefront` |
 | C3 | [Capacity that never arrives](begin-challenge/challenges/c3-capacity-that-never-arrives/README.md) | Node auto-provisioning (Karpenter) NodePools | `c3-processing` |
 | C4 | [The AI assistant is up, but not working](begin-challenge/challenges/c4-ai-assistant-up-but-not-working/README.md) | Microsoft Foundry / Azure OpenAI dependency, workload identity | `c4-assistant` |
 | A1 | [Where did DNS go?](begin-challenge/challenges/a1-where-did-dns-go/README.md) | NetworkPolicy egress, DNS | `a1-inventory` |
-| A2 | [Fast yesterday, slow today](begin-challenge/challenges/a2-fast-yesterday-slow-today/README.md) | CPU limits and throttling | `a2-checkout` |
+| A2 | [Fast yesterday, slow today](begin-challenge/challenges/a2-fast-yesterday-slow-today/README.md) | CPU limits and throttling, Managed Prometheus dashboards | `a2-checkout` |
 | A3 | [Ready for maintenance?](begin-challenge/challenges/a3-ready-for-maintenance/README.md) | PodDisruptionBudgets, evictions | `a3-maintenance` |
 | A4 | [Identity without secrets](begin-challenge/challenges/a4-identity-without-secrets/README.md) | Workload identity federation, Key Vault | `a4-config` |
 | A5 | [Running is not ready](begin-challenge/challenges/a5-running-is-not-ready/README.md) | Readiness probes, rollouts | `a5-releases` |
@@ -75,10 +75,11 @@ DNS label) are derived from the subscription and resource group, so they follow 
 ## How the environment is built
 
 One **AKS Automatic** cluster per environment (managed system node pool, node auto-provisioning, Azure CNI + Cilium,
-Azure RBAC, deployment safeguards, Gateway API via the application routing add-on). Each challenge lives in its own
-namespace, so all ten can run side by side and be reset independently. Azure services are created only for the
-challenges that need them: a Microsoft Foundry account + model deployment and a workload identity for **C4**, a
-Key Vault + workload identity for **A4**. See [docs/architecture.md](docs/architecture.md).
+Azure RBAC, deployment safeguards, the application routing add-on with managed NGINX **and** Gateway API, Managed
+Prometheus). Each challenge lives in its own namespace, so all ten can run side by side and be reset independently.
+Azure services are created only for the challenges that need them: a Microsoft Foundry account + model deployment
+and a workload identity for **C4**, a Key Vault + workload identity for **A4**; the Azure Monitor workspace that
+backs the **A2** dashboards stays in the lab resource group. See [docs/architecture.md](docs/architecture.md).
 
 ## Testing without Azure
 
@@ -91,3 +92,8 @@ Code complete, validated locally (kind) and **piloted on Azure** on 2026-10-14 (
 begin state was deployed with the PowerShell and bash scripts and the end state with Terraform. In the final run every
 challenge failed as designed in the begin state and passed in the end state. Pilot results and the changes they
 led to are in [FEASIBILITY.md](FEASIBILITY.md#pilot-gates--results-of-the-first-azure-deployment-2026-10-14-westus3-aks-automatic-1358).
+
+**2026-11-03:** after the team review, C2 became an Ingress-NGINX → Gateway API migration (application routing
+add-on, `ingress2gateway`, AI-assisted) and A2 uses the Managed Prometheus dashboards; both were re-validated on
+Azure (AKS Automatic 1.36) with all three approaches – see
+[FEASIBILITY.md](FEASIBILITY.md#changes-after-the-team-review-2026-11-03).

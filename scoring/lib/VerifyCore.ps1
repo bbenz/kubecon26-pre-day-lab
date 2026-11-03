@@ -43,39 +43,105 @@ function Test-ChallengeC1 {
     else { Fail "order reached the RabbitMQ 'orders' queue ($q1 -> $q2 messages)" }
 }
 
-# C2 - HTTPRoute backend port.
+# C2 - move the storefront from Ingress-NGINX (application routing add-on) to
+# Gateway API (application routing's approuting-istio implementation). The
+# participant names the Gateway and HTTPRoute, so they are discovered here.
 function Test-ChallengeC2 {
     $ns = 'c2-storefront'
-    $gateway = kobj get gateway store-gateway -n $ns
-    $route = kobj get httproute storefront -n $ns
-    $want = [string](Get-Prop $gateway 'metadata.annotations').'kubecon.lab/storefront-hostname'
-    Expect 'route keeps the intended hostname' $want ((@(Get-Prop $route 'spec.hostnames') -join ' '))
-    $rules = @(Get-Prop $route 'spec.rules')
-    $backend = (@($rules | ForEach-Object { $_.backendRefs } | ForEach-Object { $_.name }) -join ' ')
-    $match = (@($rules | ForEach-Object { $_.matches } | ForEach-Object { "$($_.path.type):$($_.path.value)" }) -join ' ')
-    Expect 'route still sends PathPrefix / to the store-front Service' 'store-front PathPrefix:/' "$backend $match"
-    $conditions = @((@(Get-Prop $route 'status.parents') | Select-Object -First 1).conditions)
-    $accepted = ($conditions | Where-Object type -EQ 'Accepted').status
-    $resolved = ($conditions | Where-Object type -EQ 'ResolvedRefs').status
-    Expect 'HTTPRoute status: Accepted / ResolvedRefs' 'True/True' "$accepted/$resolved"
-    $ip = (@(Get-Prop $gateway 'status.addresses') | Select-Object -First 1).value
-    if (-not $ip) { Fail 'gateway store-gateway has a public address' }
-    else {
-        try {
-            $r = Invoke-WebRequest -Uri "http://$ip/" -Headers @{ Host = $want } -TimeoutSec 15 -SkipHttpErrorCheck -UseBasicParsing
-            if ($r.StatusCode -eq 200 -and $r.Content -match 'Contoso Pet Store') { Pass "storefront served through the gateway: http://$want/ -> HTTP $($r.StatusCode)" }
-            else { Fail "storefront served through the gateway: http://$want/ -> HTTP $($r.StatusCode) (gateway $ip)" }
-        }
-        catch { Fail "storefront served through the gateway: http://$want/ (gateway $ip)"; Detail $_.Exception.Message }
-        try {
-            $r2 = Invoke-WebRequest -Uri "http://$ip/" -Headers @{ Host = 'not-the-store.example' } -TimeoutSec 15 -SkipHttpErrorCheck -UseBasicParsing
-            Expect 'requests that do not match the route are not sent to the store (HTTP status)' '404' ([string]$r2.StatusCode)
-        }
-        catch { Fail 'requests that do not match the route are not sent to the store'; Detail $_.Exception.Message }
+    $labelKey = 'service.beta.kubernetes.io/azure-dns-label-name'
+    $nsAnnotations = Get-Prop (kobj get namespace $ns) 'metadata.annotations'
+    $hostName = [string](Get-Key $nsAnnotations 'kubecon.lab/storefront-hostname')
+    $label = [string](Get-Key $nsAnnotations 'kubecon.lab/storefront-dns-label')
+    if (-not $hostName -or -not $label) {
+        Fail 'storefront hostname known (namespace annotations kubecon.lab/storefront-hostname and -dns-label)'
+        return
     }
+    # 1. A gateway of the AKS application routing Gateway API class, programmed.
+    #    Prefer the one that carries the storefront's DNS label.
+    $allGateways = @(Get-Prop (kobj get gateways.gateway.networking.k8s.io -n $ns) 'items' | Where-Object { $null -ne $_ })
+    $candidates = @($allGateways | Where-Object { (Get-Prop $_ 'spec.gatewayClassName') -eq 'approuting-istio' })
+    $gateway = @($candidates | Where-Object { [string](Get-Key (Get-Prop $_ 'spec.infrastructure.annotations') $labelKey) -eq $label }) | Select-Object -First 1
+    if (-not $gateway) { $gateway = $candidates | Select-Object -First 1 }
+    $gw = ''; $ip = ''
+    if (-not $gateway) {
+        Fail "a Gateway of class approuting-istio exists in $ns (application routing Gateway API implementation)"
+        Detail "gateways found: $((@($allGateways | ForEach-Object { "$(Get-Prop $_ 'metadata.name')($(Get-Prop $_ 'spec.gatewayClassName'))" }) -join ' '))"
+    }
+    else {
+        $gw = [string](Get-Prop $gateway 'metadata.name')
+        $programmed = Get-ConditionStatus (Get-Prop $gateway 'status.conditions') 'Programmed'
+        $ip = [string](@(Get-Prop $gateway 'status.addresses' | Where-Object { $null -ne $_ } | ForEach-Object { Get-Prop $_ 'value' }) | Select-Object -First 1)
+        if ($programmed -eq 'True' -and $ip) { Pass "Gateway $gw (approuting-istio) is programmed with public address $ip" }
+        else { Fail "Gateway $gw (approuting-istio) is programmed with a public address (Programmed=$(if ($programmed) { $programmed } else { 'unknown' }))" }
+        Expect "gateway publishes the storefront's DNS name (infrastructure annotation azure-dns-label-name)" $label ([string](Get-Key (Get-Prop $gateway 'spec.infrastructure.annotations') $labelKey))
+    }
+    # 2. An HTTPRoute attached to that gateway, accepted, for the storefront hostname.
+    $route = $null; $routeSummary = @()
+    foreach ($r in @(Get-Prop (kobj get httproutes.gateway.networking.k8s.io -n $ns) 'items' | Where-Object { $null -ne $_ })) {
+        $parents = @(Get-Prop $r 'spec.parentRefs' | Where-Object { $null -ne $_ } | ForEach-Object { [string](Get-Prop $_ 'name') })
+        $routeHosts = @(Get-Prop $r 'spec.hostnames' | Where-Object { $null -ne $_ } | ForEach-Object { [string]$_ })
+        $routeSummary += "$(Get-Prop $r 'metadata.name')|$($parents -join ' ')|$($routeHosts -join ' ')"
+        if (-not $route -and $gw -and $parents -contains $gw -and $routeHosts -contains $hostName) { $route = $r }
+    }
+    if (-not $route) {
+        Fail "an HTTPRoute attached to the gateway serves $hostName"
+        Detail "routes found (name|parents|hostnames): $($routeSummary -join '  ')"
+    }
+    else {
+        $routeName = [string](Get-Prop $route 'metadata.name')
+        $parentStatus = @(Get-Prop $route 'status.parents' | Where-Object { $null -ne $_ -and (Get-Prop $_ 'parentRef.name') -eq $gw }) | Select-Object -First 1
+        $conditions = Get-Prop $parentStatus 'conditions'
+        $accepted = Get-ConditionStatus $conditions 'Accepted'
+        $resolved = Get-ConditionStatus $conditions 'ResolvedRefs'
+        Expect "HTTPRoute $routeName attached to $gw for ${hostName}: Accepted / ResolvedRefs" 'True/True' "$accepted/$resolved"
+        $rules = @(Get-Prop $route 'spec.rules' | Where-Object { $null -ne $_ } | ForEach-Object {
+                $rule = $_
+                $matchText = @(Get-Prop $rule 'matches' | Where-Object { $null -ne $_ } | ForEach-Object { "$(Get-Prop $_ 'path.type'):$(Get-Prop $_ 'path.value')" }) -join ''
+                $backendText = @(Get-Prop $rule 'backendRefs' | Where-Object { $null -ne $_ } | ForEach-Object { "$(Get-Prop $_ 'name'):$(Get-Prop $_ 'port')" }) -join ''
+                "$matchText>$backendText"
+            })
+        if ($rules -contains 'PathPrefix:/>store-front:80' -or $rules -contains '>store-front:80') { Pass 'route sends PathPrefix / to the store-front Service on port 80' }
+        else { Fail 'route sends PathPrefix / to the store-front Service on port 80'; Detail "rules: $($rules -join '; ')" }
+    }
+    # 3. The public name now reaches the store through the gateway (the cutover).
+    if ($gw -and $ip) {
+        $tries = if ($script:QuickMode) { 2 } else { 6 }
+        $status = 0; $resolvedIps = @(); $content = ''
+        for ($i = 1; $i -le $tries; $i++) {
+            try { $resolvedIps = @([System.Net.Dns]::GetHostAddresses($hostName) | ForEach-Object { $_.IPAddressToString }) } catch { $resolvedIps = @() }
+            if ($resolvedIps -contains $ip) {
+                try {
+                    $resp = Invoke-WebRequest -Uri "http://$hostName/" -TimeoutSec 15 -SkipHttpErrorCheck -UseBasicParsing
+                    $status = [int]$resp.StatusCode; $content = [string]$resp.Content
+                }
+                catch { $status = 0; $content = '' }
+                if ($status -eq 200 -and $content -match 'Contoso Pet Store') { break }
+            }
+            if ($i -lt $tries) { Start-Sleep -Seconds 10 }
+        }
+        if ($resolvedIps -contains $ip -and $status -eq 200 -and $content -match 'Contoso Pet Store') {
+            Pass "storefront served at http://$hostName/ through the gateway (DNS -> $ip, HTTP 200)"
+        }
+        elseif (-not $resolvedIps) {
+            Fail "storefront served at http://$hostName/ through the gateway"
+            Detail 'the name does not resolve yet - publish the DNS label on the gateway (cutover); new labels take up to a minute'
+        }
+        elseif ($resolvedIps -notcontains $ip) { Fail "storefront served at http://$hostName/ through the gateway (DNS -> $($resolvedIps -join ','), gateway $ip)" }
+        else { Fail "storefront served at http://$hostName/ through the gateway (HTTP $status, gateway $ip)" }
+        try {
+            $resp2 = Invoke-WebRequest -Uri "http://$ip/" -Headers @{ Host = 'not-the-store.example' } -TimeoutSec 15 -SkipHttpErrorCheck -UseBasicParsing
+            Expect 'requests for other host names are not sent to the store (HTTP status at the gateway)' '404' ([string]$resp2.StatusCode)
+        }
+        catch { Fail 'requests for other host names are not sent to the store'; Detail $_.Exception.Message }
+    }
+    else { Fail "storefront served at http://$hostName/ through the gateway (no programmed gateway)" }
+    # 4. Ingress-NGINX decommissioned for the storefront, nothing exposed around the gateway.
+    $ingresses = @(Get-Prop (kobj get ingresses -n $ns) 'items' | Where-Object { $null -ne $_ } | ForEach-Object { "$(Get-Prop $_ 'metadata.name')($(Get-Prop $_ 'spec.ingressClassName'))" })
+    if (-not $ingresses) { Pass "legacy Ingress-NGINX path decommissioned (no Ingress left in $ns)" }
+    else { Fail "legacy Ingress-NGINX path decommissioned (Ingress still present: $($ingresses -join ' '))" }
     Expect 'store-front is not exposed directly (Service type)' 'ClusterIP' (kj get service store-front -n $ns -o 'jsonpath={.spec.type}')
-    $lbs = @((kobj get services -n $ns).items | Where-Object { $_.spec.type -eq 'LoadBalancer' } | ForEach-Object { $_.metadata.name })
-    $extra = @($lbs | Where-Object { $_ -notlike 'store-gateway*' })
+    $lbs = @(Get-Prop (kobj get services -n $ns) 'items' | Where-Object { $null -ne $_ -and (Get-Prop $_ 'spec.type') -eq 'LoadBalancer' } | ForEach-Object { [string](Get-Prop $_ 'metadata.name') })
+    $extra = @($lbs | Where-Object { $_ -notlike '*-approuting-istio' })
     if (-not $extra) { Pass "no extra public endpoints in the namespace (LoadBalancer services: $(if ($lbs) { $lbs -join ' ' } else { 'none' }))" }
     else { Fail "no extra public endpoints in the namespace (LoadBalancer services: $($lbs -join ' '))" }
 }

@@ -15,6 +15,6 @@ $script:Ctf = $null
 Export-ModuleMember -Function @(
     'Initialize-CtfLab', 'Test-CtfPrerequisites', 'Get-CtfLabSettings',
     'New-CtfResourceGroup', 'Install-CtfCluster', 'Grant-CtfClusterAdmin', 'Get-CtfCredentials',
-    'Enable-CtfGatewayApi', 'Install-CtfC4Azure', 'Install-CtfA4Azure',
+    'Enable-CtfAppRouting', 'Enable-CtfPrometheus', 'Install-CtfC4Azure', 'Install-CtfA4Azure',
     'Install-CtfChallenge', 'Write-CtfSummary', 'Remove-CtfLab'
 )

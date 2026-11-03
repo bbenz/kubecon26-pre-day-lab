@@ -83,6 +83,25 @@ ctf_apply_challenge() {
   # Phase 2: everything.
   k apply -f "$(ctf_path "$CTF_RENDERED")"
   log_ok "applied $(ctf_challenge_dir "$id" | sed "s|^$REPO_ROOT/||")/manifests"
+  ctf_prune_challenge "$id" "$ns"
+}
+
+# Deletes objects listed in <challenge>/prune.txt (one <resource>/<name> per line,
+# # comments allowed): objects of the begin state that the end state no longer
+# has, for example C2's legacy Ingress. Lets the end state be applied on top of
+# a begin-state deployment ("solve in place").
+ctf_prune_challenge() {
+  local id=$1 ns=$2 list ref
+  list="$(ctf_challenge_dir "$id")/prune.txt"
+  [ -f "$list" ] || return 0
+  while IFS= read -r ref || [ -n "$ref" ]; do
+    ref=$(printf '%s' "$ref" | sed -e 's/#.*//' -e 's/[[:space:]]//g')
+    [ -n "$ref" ] || continue
+    if [ -n "$(k get "$ref" -n "$ns" --ignore-not-found -o name 2>/dev/null | tr -d '\r')" ]; then
+      k delete "$ref" -n "$ns" --wait=true >/dev/null
+      log_ok "removed $ref (not part of the $LAB_STATE state)"
+    fi
+  done < "$list"
 }
 
 ctf_print_summary() {
@@ -98,10 +117,25 @@ ctf_print_summary() {
   done
   if ctf_selected c2; then
     log_info ""
-    log_info "C2 storefront: waiting up to 5 minutes for the gateway's public IP ..."
-    k wait --for=condition=Programmed gateway/store-gateway -n c2-storefront --timeout=300s >/dev/null 2>&1 || true
-    ip=$(k get gateway store-gateway -n c2-storefront -o jsonpath='{.status.addresses[0].value}' 2>/dev/null | tr -d '\r')
-    log_info "C2 storefront URL: http://$STOREFRONT_HOSTNAME/  (gateway IP: ${ip:-pending})"
+    if [ "$LAB_STATE" = begin ]; then
+      log_info "C2 storefront: waiting up to 5 minutes for the Ingress-NGINX public IP ..."
+      ip=""
+      for _ in $(seq 1 30); do
+        ip=$(k get ingress storefront -n c2-storefront -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null | tr -d '\r')
+        [ -n "$ip" ] && break
+        sleep 10
+      done
+      log_info "C2 storefront today (Ingress-NGINX): curl --resolve $STOREFRONT_HOSTNAME:80:${ip:-<pending>} http://$STOREFRONT_HOSTNAME/"
+      log_info "C2 public URL after the migration  : http://$STOREFRONT_HOSTNAME/  (does not resolve until the cutover)"
+    else
+      log_info "C2 storefront: waiting up to 5 minutes for the gateway's public IP ..."
+      k wait --for=condition=Programmed gateway/store-gateway -n c2-storefront --timeout=300s >/dev/null 2>&1 || true
+      ip=$(k get gateway store-gateway -n c2-storefront -o jsonpath='{.status.addresses[0].value}' 2>/dev/null | tr -d '\r')
+      log_info "C2 storefront URL: http://$STOREFRONT_HOSTNAME/  (gateway IP: ${ip:-pending}; the DNS name can take a few minutes)"
+    fi
+  fi
+  if ctf_selected a2; then
+    log_info "A2 dashboards   : Azure portal > $CLUSTER_NAME > Monitoring > Dashboards with Grafana > Kubernetes / Compute Resources / Pod"
   fi
   if ctf_selected c4; then
     log_info "C4 store admin  : kubectl --context $KUBE_CONTEXT port-forward -n c4-assistant svc/store-admin 8081:80  ->  http://localhost:8081"

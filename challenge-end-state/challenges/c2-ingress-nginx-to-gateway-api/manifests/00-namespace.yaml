@@ -1,0 +1,13 @@
+# The storefront's public name is an Azure public IP DNS label:
+#   <dns-label>.<region>.cloudapp.azure.com
+# Moving the storefront to Gateway API includes publishing this name on the new
+# gateway (see README.md).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: c2-storefront
+  labels:
+    kubecon.lab/challenge: c2
+  annotations:
+    kubecon.lab/storefront-hostname: "__STOREFRONT_HOSTNAME__"
+    kubecon.lab/storefront-dns-label: "__STOREFRONT_DNS_LABEL__"

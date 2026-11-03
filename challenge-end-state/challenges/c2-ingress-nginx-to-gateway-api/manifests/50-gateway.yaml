@@ -1,0 +1,30 @@
+# The storefront's new front door: a Gateway API gateway served by the AKS
+# application routing add-on's Istio-based implementation. Generated from the
+# storefront's Ingress with ingress2gateway, then adapted for AKS (see the
+# begin-state SOLUTION.md for the generated output and every change).
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  # ingress2gateway named the Gateway after the IngressClass
+  # (webapprouting.kubernetes.azure.com).
+  name: store-gateway
+  namespace: c2-storefront
+  labels:
+    kubecon.lab/challenge: c2
+spec:
+  # ingress2gateway copies the IngressClass name; the application routing
+  # Gateway API implementation is the GatewayClass approuting-istio.
+  gatewayClassName: approuting-istio
+  infrastructure:
+    annotations:
+      # Cutover: publishes the storefront's public name on this gateway's
+      # public IP (<dns-label>.<region>.cloudapp.azure.com).
+      service.beta.kubernetes.io/azure-dns-label-name: "__STOREFRONT_DNS_LABEL__"
+  listeners:
+    - name: http
+      hostname: "__STOREFRONT_HOSTNAME__"
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: Same

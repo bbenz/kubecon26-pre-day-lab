@@ -1,0 +1,29 @@
+# The storefront's route, generated from its Ingress with ingress2gateway and
+# attached to the store-gateway Gateway.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: storefront
+  namespace: c2-storefront
+  labels:
+    kubecon.lab/challenge: c2
+  annotations:
+    kubecon.lab/change-ticket: "CHG-1121 - move the storefront from Ingress-NGINX to Gateway API"
+spec:
+  parentRefs:
+    - name: store-gateway
+  hostnames:
+    - "__STOREFRONT_HOSTNAME__"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: store-front
+          port: 80
+      # ingress2gateway translated nginx.ingress.kubernetes.io/proxy-read-timeout
+      # "120" into 20m0s and warned that this is a best-effort translation;
+      # 120s keeps the original intent.
+      timeouts:
+        request: 120s

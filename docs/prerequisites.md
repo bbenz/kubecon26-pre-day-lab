@@ -12,7 +12,13 @@
 | **C4 only:** model `gpt-6-luna` (version `2026-09-22`) available as **GlobalStandard** in `AOAI_LOCATION` (default = region), with ≥ 50K TPM quota | The store assistant's model deployment. Change with `AOAI_MODEL_NAME` / `AOAI_MODEL_VERSION` / `AOAI_CAPACITY`. | `az cognitiveservices model list -l <region> --query "[?model.name=='gpt-6-luna'].model.version"` and `az cognitiveservices usage list -l <region> -o table` |
 
 No preview feature registrations are needed: AKS Automatic, managed system node pools, the managed Gateway API CRDs,
-the application routing Istio implementation and LocalDNS are all GA (Azure CLI ≥ 2.86).
+the application routing add-on (managed NGINX and the Istio implementation), Managed Prometheus and LocalDNS are
+all GA (Azure CLI ≥ 2.86).
+
+> **Application routing NGINX support window.** Microsoft-supported security patches for the add-on's managed
+> NGINX end in **November 2026**; enabling it is still allowed at the time of writing. Challenge C2 starts on it
+> on purpose (it is the migration source). Re-check before the event that `az aks create --enable-app-routing` /
+> `az aks approuting enable` still deploy NGINX on new clusters.
 
 ## Tools
 
@@ -23,10 +29,13 @@ the application routing Istio implementation and LocalDNS are all GA (Azure CLI 
 | bash | 3.2+ (macOS) / 4+ — Linux, WSL, Git Bash for Windows, Azure Cloud Shell | `azure-cli-bash/`, `scoring/verify.sh` |
 | PowerShell | **7.4+** (`pwsh`) on Windows, Linux or macOS | `azure-cli-powershell/`, `scoring/verify.ps1` |
 | Terraform | ≥ 1.9 (tested with 1.16) — providers azurerm 5.9, azapi 2.13, alekc/kubectl 2.4, time 0.14 | `terraform/` |
-| `curl` | any | `scoring/verify.sh` (C2) |
+| `curl` | any | `scoring/verify.sh` (C2), C2 side-by-side tests (`curl.exe` on Windows) |
+| [`ingress2gateway`](https://github.com/kubernetes-sigs/ingress2gateway/releases) | 1.2.0 | **participants**, C2 (translates the Ingress to Gateway API; install commands in the C2 README) |
+| An AI assistant (GitHub Copilot, Copilot in Azure, …) | – | **participants**, C2 (adapts the ingress2gateway draft – optional but intended) |
+| A browser signed in to the Azure portal | – | **participants**, A2 (Managed Prometheus **Dashboards with Grafana**) and the C2 cutover check |
 
 Azure Cloud Shell includes the Azure CLI, `kubectl`, PowerShell 7 and Terraform; run `az aks install-cli` if
-`kubelogin` is missing.
+`kubelogin` is missing. `ingress2gateway` is not included – download the Linux release (see the C2 README).
 
 ### The `aks-preview` extension
 
@@ -53,6 +62,8 @@ kubelogin convert-kubeconfig -l azurecli --context <cluster>
 | Challenge | Kubernetes | Azure |
 |---|---|---|
 | All | RBAC Cluster Admin (or Admin on the challenge namespaces + read on nodes/NodePools) | Reader on the resource group |
+| C2 | create Gateways/HTTPRoutes and delete Ingresses in `c2-storefront`; read IngressClasses, GatewayClasses and `nginxingresscontrollers` (cluster-scoped) | – (the cutover is a Kubernetes annotation; Azure creates the DNS name). The optional production step `az aks approuting update --nginx None` would need write access to the cluster – not part of the lab |
 | C3 | edit `nodepools.karpenter.sh` (cluster-scoped) | – |
 | C4 | – | read Foundry deployments (`az cognitiveservices account deployment list`) |
+| A2 | – | open **Dashboards with Grafana** on the cluster: read access to the Azure Monitor workspace's data. Owner worked in testing (no extra role); with a narrower role add **Monitoring Data Reader** on the workspace (`amw-ctf-<id>` in the lab resource group). `kubectl top` and `/stats` work without it |
 | A4 | – | update federated credentials on `id-ctf-config-reader` (Managed Identity Contributor on the identity, or resource-group Contributor) |

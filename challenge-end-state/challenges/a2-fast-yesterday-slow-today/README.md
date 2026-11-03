@@ -9,6 +9,10 @@ The fixed load test meets the objective (p95 ≤ 300 ms, 0 errors at concurrency
 The workload, load test, LimitRange (max 1 CPU / 512Mi per container) and objective are unchanged.
 2 replicas × 1 CPU is another valid end state.
 
+`loadgen` sends the same steady background traffic (about one checkout per second) as in the begin state. On the
+cluster's **Dashboards with Grafana → Kubernetes / Compute Resources / Pod** view (Managed Prometheus) the
+`checkout-api` container shows CPU usage well below its 1 CPU limit and no throttling between load tests.
+
 How a participant gets here: [begin-challenge/challenges/a2-fast-yesterday-slow-today/SOLUTION.md](../../../begin-challenge/challenges/a2-fast-yesterday-slow-today/SOLUTION.md)
 
 ## Verify

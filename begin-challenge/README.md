@@ -19,7 +19,7 @@ All three approaches create the same environment. Prerequisites: [docs/prerequis
 | ID | Challenge | Namespace | Instructions | How to reach the end state |
 |---|---|---|---|---|
 | C1 | The store won't start | `c1-store` | [README](challenges/c1-the-store-wont-start/README.md) | [SOLUTION](challenges/c1-the-store-wont-start/SOLUTION.md) |
-| C2 | Healthy pods, broken storefront | `c2-storefront` | [README](challenges/c2-healthy-pods-broken-storefront/README.md) | [SOLUTION](challenges/c2-healthy-pods-broken-storefront/SOLUTION.md) |
+| C2 | Move the storefront to Gateway API | `c2-storefront` | [README](challenges/c2-ingress-nginx-to-gateway-api/README.md) | [SOLUTION](challenges/c2-ingress-nginx-to-gateway-api/SOLUTION.md) |
 | C3 | Capacity that never arrives | `c3-processing` | [README](challenges/c3-capacity-that-never-arrives/README.md) | [SOLUTION](challenges/c3-capacity-that-never-arrives/SOLUTION.md) |
 | C4 | The AI assistant is up, but not working | `c4-assistant` | [README](challenges/c4-ai-assistant-up-but-not-working/README.md) | [SOLUTION](challenges/c4-ai-assistant-up-but-not-working/SOLUTION.md) |
 | A1 | Where did DNS go? | `a1-inventory` | [README](challenges/a1-where-did-dns-go/README.md) | [SOLUTION](challenges/a1-where-did-dns-go/SOLUTION.md) |
@@ -153,6 +153,8 @@ terraform apply
 cd begin-challenge/terraform && terraform destroy
 ```
 
-The Azure CLI deployments also create (or reuse) `DefaultResourceGroup-<region>` with a Log Analytics workspace
-for Container Insights (`az aks create` monitoring defaults). It is shared by every CLI-created cluster in the
-subscription and is not deleted by the cleanup scripts – remove it yourself when nothing else uses it.
+Clusters created by the Azure CLI deployments keep their monitoring data in the lab resource group (Azure Monitor
+workspace `amw-ctf-<id>` for Managed Prometheus, Log Analytics workspace `law-ctf-<id>` for Container Insights),
+so the cleanup removes it. Clusters created by earlier versions of these scripts used the `az aks create` defaults
+instead: a shared `DefaultResourceGroup-<region>` that the cleanup scripts don't delete – remove it yourself when
+nothing else uses it.

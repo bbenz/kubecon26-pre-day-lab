@@ -78,6 +78,26 @@ function Install-CtfChallenge([string]$Id) {
     if ($LASTEXITCODE -ne 0) { throw "kubectl apply failed for $Id" }
     $relative = [IO.Path]::GetRelativePath($c.RepoRoot, (Get-CtfChallengeDir $Id))
     Write-CtfOk "applied $relative/manifests"
+    Remove-CtfPrunedObjects $Id $ns
+}
+
+# Deletes objects listed in <challenge>/prune.txt (one <resource>/<name> per line,
+# # comments allowed): objects of the begin state that the end state no longer
+# has, for example C2's legacy Ingress. Lets the end state be applied on top of
+# a begin-state deployment ("solve in place").
+function Remove-CtfPrunedObjects([string]$Id, [string]$Namespace) {
+    $list = Join-Path (Get-CtfChallengeDir $Id) 'prune.txt'
+    if (-not (Test-Path $list)) { return }
+    foreach ($line in Get-Content $list) {
+        $ref = ($line -replace '#.*$', '') -replace '\s', ''
+        if (-not $ref) { continue }
+        $found = (Invoke-Kubectl get $ref -n $Namespace --ignore-not-found -o name 2>$null | Out-String).Trim()
+        if ($found) {
+            Invoke-Kubectl delete $ref -n $Namespace --wait=true | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "Could not delete $ref in $Namespace" }
+            Write-CtfOk "removed $ref (not part of the $($script:Ctf.State) state)"
+        }
+    }
 }
 
 function Write-CtfSummary {
@@ -93,10 +113,26 @@ function Write-CtfSummary {
     }
     if (Test-CtfSelected 'c2') {
         Write-CtfInfo ''
-        Write-CtfInfo "C2 storefront: waiting up to 5 minutes for the gateway's public IP ..."
-        Invoke-Kubectl wait --for=condition=Programmed gateway/store-gateway -n c2-storefront --timeout=300s 2>$null | Out-Null
-        $ip = (Invoke-Kubectl get gateway store-gateway -n c2-storefront -o 'jsonpath={.status.addresses[0].value}' 2>$null | Out-String).Trim()
-        Write-CtfInfo "C2 storefront URL: http://$($c.StorefrontHostname)/  (gateway IP: $(if ($ip) { $ip } else { 'pending' }))"
+        $hostName = $c.StorefrontHostname
+        if ($c.State -eq 'begin') {
+            Write-CtfInfo 'C2 storefront: waiting up to 5 minutes for the Ingress-NGINX public IP ...'
+            $ip = ''
+            for ($i = 0; $i -lt 30 -and -not $ip; $i++) {
+                $ip = (Invoke-Kubectl get ingress storefront -n c2-storefront -o 'jsonpath={.status.loadBalancer.ingress[0].ip}' 2>$null | Out-String).Trim()
+                if (-not $ip) { Start-Sleep -Seconds 10 }
+            }
+            Write-CtfInfo "C2 storefront today (Ingress-NGINX): curl --resolve ${hostName}:80:$(if ($ip) { $ip } else { '<pending>' }) http://$hostName/"
+            Write-CtfInfo "C2 public URL after the migration  : http://$hostName/  (does not resolve until the cutover)"
+        }
+        else {
+            Write-CtfInfo "C2 storefront: waiting up to 5 minutes for the gateway's public IP ..."
+            Invoke-Kubectl wait --for=condition=Programmed gateway/store-gateway -n c2-storefront --timeout=300s 2>$null | Out-Null
+            $ip = (Invoke-Kubectl get gateway store-gateway -n c2-storefront -o 'jsonpath={.status.addresses[0].value}' 2>$null | Out-String).Trim()
+            Write-CtfInfo "C2 storefront URL: http://$hostName/  (gateway IP: $(if ($ip) { $ip } else { 'pending' }); the DNS name can take a few minutes)"
+        }
+    }
+    if (Test-CtfSelected 'a2') {
+        Write-CtfInfo "A2 dashboards   : Azure portal > $($c.ClusterName) > Monitoring > Dashboards with Grafana > Kubernetes / Compute Resources / Pod"
     }
     if (Test-CtfSelected 'c4') {
         Write-CtfInfo "C4 store admin  : kubectl --context $($c.KubeContext) port-forward -n c4-assistant svc/store-admin 8081:80  ->  http://localhost:8081"

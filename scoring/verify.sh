@@ -84,7 +84,7 @@ wait_job() {
 
 title() {
   case "$1" in
-    c1) echo "C1 The store won't start" ;;            c2) echo "C2 Healthy pods, broken storefront" ;;
+    c1) echo "C1 The store won't start" ;;            c2) echo "C2 Move the storefront to Gateway API" ;;
     c3) echo "C3 Capacity that never arrives" ;;      c4) echo "C4 The AI assistant is up, but not working" ;;
     a1) echo "A1 Where did DNS go?" ;;                a2) echo "A2 Fast yesterday, slow today" ;;
     a3) echo "A3 Ready for maintenance?" ;;           a4) echo "A4 Identity without secrets" ;;

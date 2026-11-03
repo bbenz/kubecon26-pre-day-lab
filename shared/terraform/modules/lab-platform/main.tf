@@ -42,7 +42,8 @@ resource "azurerm_role_assignment" "cluster_admin" {
 
 # The AKS Automatic cluster. azapi is used so the request mirrors the Azure CLI
 # flags exactly: az aks create --sku automatic --enable-hosted-system
-#   --enable-gateway-api --enable-app-routing-istio
+#   --enable-app-routing --enable-gateway-api --enable-app-routing-istio
+#   --enable-azure-monitor-metrics (data collection resources: monitoring.tf)
 resource "azapi_resource" "aks" {
   type      = "Microsoft.ContainerService/managedClusters@${local.aks_api_version}"
   name      = var.cluster_name
@@ -65,18 +66,33 @@ resource "azapi_resource" "aks" {
         enabled = true
       }
       ingressProfile = {
-        # Managed Gateway API CRDs (challenge C2).
+        # Managed Gateway API CRDs (challenge C2 migrates the storefront to Gateway API).
         gatewayAPI = {
           installation = "Standard"
         }
-        # Istio-based Gateway API implementation of the application routing add-on
-        # (GatewayClass "approuting-istio").
+        # Application routing add-on: managed NGINX (IngressClass
+        # webapprouting.kubernetes.azure.com - challenge C2 starts on Ingress-NGINX)
+        # and its Istio-based Gateway API implementation (GatewayClass approuting-istio).
         webAppRouting = {
           enabled = true
+          nginx = {
+            defaultIngressControllerType = "AnnotationControlled"
+          }
           gatewayAPIImplementations = {
             appRoutingIstio = {
               mode = "Enabled"
             }
+          }
+        }
+      }
+      # Managed Prometheus metrics agent (challenge A2 dashboards). The Azure
+      # Monitor workspace and data collection rule are in monitoring.tf.
+      azureMonitorProfile = {
+        metrics = {
+          enabled = true
+          kubeStateMetrics = {
+            metricLabelsAllowlist      = ""
+            metricAnnotationsAllowList = ""
           }
         }
       }

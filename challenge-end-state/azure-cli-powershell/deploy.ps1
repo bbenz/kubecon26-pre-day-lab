@@ -52,7 +52,8 @@ Install-CtfCluster
 Get-CtfCredentials
 
 # Azure services needed by individual challenges
-Enable-CtfGatewayApi   # C2: Gateway API (application routing add-on, Istio)
+Enable-CtfAppRouting   # C2: application routing add-on - managed NGINX + Gateway API (approuting-istio)
+Enable-CtfPrometheus   # A2: Managed Prometheus for the Grafana dashboards
 Install-CtfC4Azure     # C4: Foundry model deployment + ai-service workload identity
 Install-CtfA4Azure     # A4: Key Vault + identity; federated subject from challenges/a4-*/azure.env
 
