@@ -1,0 +1,251 @@
+<!doctype html>
+<!--
+  KubeCon AKS capture-the-flag lab - live leaderboard (projector view).
+  Open it with leaderboard/board.ps1 or leaderboard/board.sh: they read the results with your
+  Microsoft Entra sign-in and keep board-data.js (next to this page) up to date. The page reloads
+  itself every few seconds. Double-click a player to hide them (press U to show hidden players again).
+  Names and IDs come from attendees, so they are only ever inserted as plain text.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KubeCon AKS Capture the Flag - Leaderboard</title>
+<style>
+  :root {
+    --bg: #0b1020; --panel: #121a33; --line: #22305a; --text: #e8edf7; --dim: #7f8bab;
+    --blue: #326ce5; --green: #3ddc84; --amber: #ffb547; --gold: #ffd54a; --red: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif; }
+  body { font-size: clamp(14px, 1.45vw, 30px); padding: 1.1em 1.6em 0.8em; min-height: 100vh;
+    display: flex; flex-direction: column; }
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 1em; flex-wrap: wrap;
+    border-bottom: 3px solid var(--blue); padding-bottom: 0.4em; margin-bottom: 0.6em; }
+  h1 { margin: 0; font-size: 1.9em; letter-spacing: 0.01em; }
+  h1 .flag { color: var(--blue); }
+  #stats { color: var(--dim); font-size: 0.85em; white-space: nowrap; }
+  #stats b { color: var(--text); }
+  #banner { display: none; background: #3a1d1d; color: #ffd6d6; border: 1px solid var(--red);
+    border-radius: 0.3em; padding: 0.35em 0.7em; margin-bottom: 0.6em; font-size: 0.8em; }
+  main { flex: 1; }
+  table { width: 100%; border-collapse: separate; border-spacing: 0 0.22em; }
+  th { color: var(--dim); font-weight: 600; font-size: 0.75em; text-align: center; padding: 0 0.3em 0.2em; }
+  th.player, td.player { text-align: left; }
+  th .solves { display: block; font-weight: 400; font-size: 0.85em; color: var(--dim); }
+  td { background: var(--panel); padding: 0.32em 0.4em; text-align: center; white-space: nowrap; }
+  tr td:first-child { border-radius: 0.35em 0 0 0.35em; }
+  tr td:last-child { border-radius: 0 0.35em 0.35em 0; }
+  td.rank { width: 3.2em; font-weight: 700; color: var(--dim); }
+  td.player { font-weight: 600; max-width: 14em; overflow: hidden; text-overflow: ellipsis; }
+  td.flags { font-size: 1.25em; font-weight: 800; color: var(--green); width: 3em; }
+  td.flags.zero { color: var(--dim); }
+  td.last { color: var(--dim); font-size: 0.8em; width: 5.5em; }
+  td.cell { width: 4.6em; font-size: 0.95em; }
+  td.cap { color: var(--green); font-weight: 700; }
+  td.cap small, td.first small { display: block; font-weight: 400; font-size: 0.6em; color: var(--dim); }
+  td.first { color: var(--gold); font-weight: 800; box-shadow: inset 0 0 0 2px var(--gold); }
+  td.prog { color: var(--amber); font-size: 0.75em; }
+  td.none { color: #3b4770; }
+  tr.top1 td { background: #1d2547; }
+  #empty { color: var(--dim); text-align: center; margin-top: 3em; font-size: 1.2em; }
+  #more { color: var(--dim); text-align: center; font-size: 0.8em; margin-top: 0.3em; }
+  footer { color: var(--dim); font-size: 0.7em; display: flex; justify-content: space-between; gap: 1em;
+    flex-wrap: wrap; border-top: 1px solid var(--line); padding-top: 0.45em; margin-top: 0.6em; }
+  footer code { color: var(--text); }
+</style>
+<script src="board-data.js"></script>
+</head>
+<body>
+<header>
+  <h1><span class="flag">&#9873;</span> <span id="title">KubeCon AKS Capture the Flag</span></h1>
+  <div id="stats">waiting for data&hellip;</div>
+</header>
+<div id="banner"></div>
+<main>
+  <table id="board" hidden>
+    <thead><tr id="head"></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <div id="more"></div>
+  <div id="empty" hidden></div>
+</main>
+<footer>
+  <span>Solved a challenge? Run <code>scoring/verify.sh --challenges &lt;id&gt;</code> or
+    <code>./scoring/verify.ps1 -Challenges &lt;id&gt;</code> &ndash; your flag shows up here within seconds.</span>
+  <span id="hint"></span>
+</footer>
+<script>
+(function () {
+  'use strict';
+  var D = window.CTF_BOARD;
+  var HIDDEN_KEY = 'kubecon-ctf-hidden';
+  var refresh = Math.min(300, Math.max(5, Number(D && D.refresh) || 10));
+  setTimeout(function () { location.reload(); }, refresh * 1000);
+
+  function $(id) { return document.getElementById(id); }
+  function el(tag, cls, text) {
+    var x = document.createElement(tag);
+    if (cls) { x.className = cls; }
+    if (text !== undefined) { x.textContent = text; }   // never innerHTML: names come from attendees
+    return x;
+  }
+  function loadHidden() {
+    try { return new Set(JSON.parse(localStorage.getItem(HIDDEN_KEY) || '[]')); } catch (e) { return new Set(); }
+  }
+  function saveHidden(set) {
+    try { localStorage.setItem(HIDDEN_KEY, JSON.stringify(Array.from(set))); } catch (e) { /* storage unavailable */ }
+  }
+  function decodeName(b64) {
+    var s = '';
+    try {
+      var bin = atob(String(b64 || ''));
+      var bytes = new Uint8Array(bin.length);
+      for (var i = 0; i < bin.length; i++) { bytes[i] = bin.charCodeAt(i); }
+      s = new TextDecoder('utf-8').decode(bytes);
+    } catch (e) { s = ''; }
+    return s.replace(/[^\p{L}\p{N} .'\-]/gu, '').replace(/\s+/g, ' ').trim().slice(0, 24);
+  }
+  function banner(text) { var b = $('banner'); b.textContent = text; b.style.display = 'block'; }
+  function clock(t) { return new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }); }
+
+  if (!D || !Array.isArray(D.entries)) {
+    $('empty').hidden = false;
+    $('empty').textContent = 'No data yet - start leaderboard/board.ps1 or leaderboard/board.sh on this laptop.';
+    return;
+  }
+
+  var title = String(D.title || 'KubeCon AKS Capture the Flag').slice(0, 80);
+  $('title').textContent = title;
+  document.title = title + ' - Leaderboard';
+  var start = D.start ? Date.parse(D.start) : NaN;
+  function when(t) {
+    if (!isFinite(t)) { return ''; }
+    if (!isNaN(start)) {
+      var s = Math.max(0, Math.round((t - start) / 1000));
+      var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+      return '+' + (h ? h + ':' + String(m).padStart(2, '0') : String(m)) + ':' + String(sec).padStart(2, '0');
+    }
+    return new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+
+  var challenges = (Array.isArray(D.challenges) ? D.challenges : [])
+    .map(function (c) { return String(c).toLowerCase(); })
+    .filter(function (c) { return /^[ac][0-9]$/.test(c); });
+
+  // One record per challenge and verify run: results/<player-id>/<challenge>/<timestamp>.json, with the
+  // display name (base64), pass/fail and checks in the metadata. A challenge's flag is captured at the
+  // first passing run; the latest run shows progress on challenges not yet captured.
+  var players = new Map();
+  D.entries.forEach(function (e) {
+    if (!e || typeof e.n !== 'string') { return; }
+    var m = /^results\/([A-Za-z0-9._-]{1,64})\/([ac][0-9])\/[^\/]{1,100}$/.exec(e.n);
+    if (!m || challenges.indexOf(m[2]) < 0) { return; }
+    var t = Date.parse(e.t);
+    if (isNaN(t)) { return; }
+    var md = e.m || {};
+    var p = players.get(m[1]);
+    if (!p) { p = { id: m[1], name: '', nameAt: -1, caps: {}, latest: {} }; players.set(m[1], p); }
+    if (t > p.nameAt) { var nm = decodeName(md.player); if (nm) { p.name = nm; p.nameAt = t; } }
+    var passed = String(md.passed).toLowerCase() === 'true';
+    var checks = /^\d{1,3}\/\d{1,3}$/.test(String(md.checks || '')) ? String(md.checks) : '';
+    if (passed && !(p.caps[m[2]] <= t)) { p.caps[m[2]] = t; }
+    if (!p.latest[m[2]] || p.latest[m[2]].t < t) { p.latest[m[2]] = { t: t, checks: checks, passed: passed }; }
+  });
+  players.forEach(function (p) {
+    var times = Object.keys(p.caps).map(function (k) { return p.caps[k]; });
+    p.flags = times.length;
+    p.last = times.length ? Math.max.apply(null, times) : Infinity;
+    if (!p.name) { p.name = 'Player ' + p.id.slice(-4); }
+  });
+
+  var hidden = loadHidden();
+  var maxRows = Math.min(200, Math.max(5, Number(D.maxRows) || 20));
+
+  function render() {
+    var visible = Array.from(players.values()).filter(function (p) { return !hidden.has(p.id); });
+    visible.sort(function (a, b) { return b.flags - a.flags || a.last - b.last || a.name.localeCompare(b.name); });
+    var firstBlood = {}, solves = {}, totalFlags = 0;
+    visible.forEach(function (p) {
+      Object.keys(p.caps).forEach(function (c) {
+        solves[c] = (solves[c] || 0) + 1; totalFlags++;
+        if (!firstBlood[c] || p.caps[c] < firstBlood[c].t) { firstBlood[c] = { id: p.id, t: p.caps[c] }; }
+      });
+    });
+
+    var stats = $('stats');
+    stats.textContent = '';
+    stats.appendChild(el('b', null, String(visible.length)));
+    stats.appendChild(document.createTextNode(visible.length === 1 ? ' player \u00b7 ' : ' players \u00b7 '));
+    stats.appendChild(el('b', null, String(totalFlags)));
+    stats.appendChild(document.createTextNode(' flags \u00b7 updated ' + clock(Date.parse(D.generated))));
+
+    var head = $('head');
+    head.textContent = '';
+    head.appendChild(el('th', null, '#'));
+    head.appendChild(el('th', 'player', 'Player'));
+    challenges.forEach(function (c) {
+      var th = el('th', null, c.toUpperCase());
+      th.appendChild(el('span', 'solves', (solves[c] || 0) + ' \u2714'));
+      head.appendChild(th);
+    });
+    head.appendChild(el('th', null, 'Flags'));
+    head.appendChild(el('th', null, isNaN(start) ? 'Last flag' : 'Time'));
+
+    var rows = $('rows');
+    rows.textContent = '';
+    var rank = 0;
+    visible.slice(0, maxRows).forEach(function (p, i) {
+      var prev = visible[i - 1];
+      if (p.flags > 0 && !(prev && prev.flags === p.flags && prev.last === p.last)) { rank = i + 1; }
+      var tr = el('tr', rank === 1 && p.flags > 0 ? 'top1' : '');
+      var medal = ['\uD83E\uDD47', '\uD83E\uDD48', '\uD83E\uDD49'][rank - 1];
+      tr.appendChild(el('td', 'rank', p.flags === 0 ? '\u2013' : (medal || String(rank))));
+      var nameCell = el('td', 'player', p.name);
+      nameCell.title = 'Player ID ' + p.id + ' - double-click to hide';
+      tr.appendChild(nameCell);
+      challenges.forEach(function (c) {
+        var td;
+        if (p.caps[c] !== undefined) {
+          var first = firstBlood[c] && firstBlood[c].id === p.id;
+          td = el('td', 'cell ' + (first ? 'first' : 'cap'), first ? '\u2605' : '\u2714');
+          td.appendChild(el('small', null, when(p.caps[c])));
+          if (first) { td.title = 'First to capture ' + c.toUpperCase(); }
+        } else if (p.latest[c]) {
+          td = el('td', 'cell prog', p.latest[c].checks || '\u2026');
+          td.title = 'Latest check: ' + (p.latest[c].checks || 'in progress');
+        } else {
+          td = el('td', 'cell none', '\u00b7');
+        }
+        tr.appendChild(td);
+      });
+      tr.appendChild(el('td', 'flags' + (p.flags === 0 ? ' zero' : ''), String(p.flags)));
+      tr.appendChild(el('td', 'last', p.flags ? when(p.last) : ''));
+      tr.addEventListener('dblclick', function () { hidden.add(p.id); saveHidden(hidden); render(); });
+      rows.appendChild(tr);
+    });
+
+    $('board').hidden = visible.length === 0;
+    $('empty').hidden = visible.length !== 0;
+    $('empty').textContent = 'Waiting for the first results\u2026';
+    $('more').textContent = visible.length > maxRows ? '+ ' + (visible.length - maxRows) + ' more players' : '';
+    $('hint').textContent = hidden.size ? hidden.size + ' hidden \u00b7 press U to show them again' : '\u2605 first to capture';
+  }
+
+  render();
+  document.addEventListener('keydown', function (ev) {
+    if (ev.key === 'u' || ev.key === 'U') { hidden.clear(); saveHidden(hidden); render(); }
+  });
+
+  var generated = Date.parse(D.generated);
+  if (D.error) {
+    banner("Can't read the latest results: " + String(D.error).slice(0, 300) +
+      (D.dataTime ? ' - showing results from ' + clock(Date.parse(D.dataTime)) : ''));
+  } else if (!isNaN(generated) && Date.now() - generated > Math.max(30, 3 * refresh) * 1000) {
+    banner('Results are not updating - is leaderboard/board.ps1 (or board.sh) still running? Last update ' + clock(generated));
+  }
+})();
+</script>
+</body>
+</html>

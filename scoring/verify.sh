@@ -12,7 +12,8 @@
 #   scoring/verify.sh --quick                           # shorter observation windows
 #
 # Needs only kubectl (with access to the cluster) and curl. Exit code 0 when
-# every selected challenge passes.
+# every selected challenge passes. On a machine registered for an event
+# leaderboard, each result is also recorded there (leaderboard/README.md).
 # -----------------------------------------------------------------------------
 set -uo pipefail
 export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL="*"
@@ -22,14 +23,16 @@ ALL_CHALLENGES="c1 c2 c3 c4 a1 a2 a3 a4 a5 a6"
 KUBE_CONTEXT=""
 CHALLENGES=""
 QUICK=false
+NO_REPORT=false
 
 usage() {
-  sed -n '3,16p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '3,17p' "$0" | sed 's/^# \{0,1\}//'
   cat <<EOF
 Options:
   --context NAME        kubectl context (default: current context)
   -c, --challenges LIST comma-separated IDs (default: every challenge namespace found)
-  --quick               shorter waits/observation windows (less strict, for fast iteration)
+  --quick               shorter waits/observation windows (less strict, for fast iteration; not recorded on a leaderboard)
+  --no-report           don't record this run on the event leaderboard
   -h, --help            show this help
 EOF
 }
@@ -39,6 +42,7 @@ while [ $# -gt 0 ]; do
     --context)         KUBE_CONTEXT="${2:?}"; shift 2 ;;
     -c|--challenges)   CHALLENGES="${2:?}"; shift 2 ;;
     --quick)           QUICK=true; shift ;;
+    --no-report)       NO_REPORT=true; shift ;;
     -h|--help)         usage; exit 0 ;;
     *)                 echo "Unknown option $1" >&2; exit 2 ;;
   esac
@@ -81,6 +85,8 @@ wait_job() {
 . "$SCORING_DIR/lib/verify-core.sh"
 # shellcheck source=lib/verify-alternates.sh
 . "$SCORING_DIR/lib/verify-alternates.sh"
+# shellcheck source=lib/leaderboard.sh
+. "$SCORING_DIR/lib/leaderboard.sh"
 
 title() {
   case "$1" in
@@ -99,17 +105,20 @@ fi
 CHALLENGES=$(printf '%s' "$CHALLENGES" | tr ',' ' ' | tr '[:upper:]' '[:lower:]')
 
 echo "${B}KubeCon AKS CTF - verification against context '$KUBE_CONTEXT'${N}"
+lb_init "$NO_REPORT" "$QUICK"
 SUMMARY=""; OVERALL=0
 for id in $ALL_CHALLENGES; do
   case " $CHALLENGES " in *" $id "*) ;; *) continue ;; esac
-  CH_PASS=0; CH_FAIL=0
+  CH_PASS=0; CH_FAIL=0; deployed=true
   printf '\n%s[%s] %s%s\n' "$B" "$id" "$(title "$id")" "$N"
   if ! kj get namespace "$(case $id in c1) echo c1-store;; c2) echo c2-storefront;; c3) echo c3-processing;; c4) echo c4-assistant;; a1) echo a1-inventory;; a2) echo a2-checkout;; a3) echo a3-maintenance;; a4) echo a4-config;; a5) echo a5-releases;; a6) echo a6-records;; esac)" >/dev/null; then
     fail "challenge namespace not found - is $id deployed in this context?"
+    deployed=false
   else
     "verify_$id"
   fi
   if [ "$CH_FAIL" -eq 0 ]; then res="PASSED"; else res="NOT PASSED"; OVERALL=1; fi
+  [ "$deployed" = true ] && lb_submit "$id" "$res" "$CH_PASS" "$((CH_PASS + CH_FAIL))"
   SUMMARY="$SUMMARY$(printf '  %-4s %-11s %2d/%-2d checks  %s' "$id" "$res" "$CH_PASS" "$((CH_PASS + CH_FAIL))" "$(title "$id" | cut -d' ' -f2-)")
 "
 done

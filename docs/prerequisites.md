@@ -67,3 +67,4 @@ kubelogin convert-kubeconfig -l azurecli --context <cluster>
 | C4 | – | read Foundry deployments (`az cognitiveservices account deployment list`) |
 | A2 | – | open **Dashboards with Grafana** on the cluster: read access to the Azure Monitor workspace's data. Owner worked in testing (no extra role); with a narrower role add **Monitoring Data Reader** on the workspace (`amw-ctf-<id>` in the lab resource group). `kubectl top` and `/stats` work without it |
 | A4 | – | update federated credentials on `id-ctf-config-reader` (Managed Identity Contributor on the identity, or resource-group Contributor) |
+| Leaderboard (optional) | – | none: lab VMs only need outbound HTTPS to the leaderboard's storage account (`<account>.blob.core.windows.net`) and `curl` for `verify.sh`; the token comes from a Skillable life cycle action. The **instructor** needs Storage Blob Data Reader on that account to show the board ([leaderboard/README.md](../leaderboard/README.md)) |

@@ -127,6 +127,12 @@ Not changed (noted for a follow-up): C1 feedback – participants without Fastif
 `FASTIFY_ADDRESS` with the port, and `last-applied-configuration` shows only the current (broken) value, not a
 "last known good" one.
 
+**Leaderboard (added 2026-11-03).** An optional projected leaderboard: `scoring/verify.*` on a lab VM registered by a
+Skillable life cycle action records each result in a locked-down storage account (create-only token, no anonymous
+access, no account keys); the instructor's laptop reads it with an Entra sign-in. Attendees need no Azure role, only
+outbound HTTPS to the storage account – confirm that egress in the Skillable pilot. See
+[leaderboard/README.md](leaderboard/README.md).
+
 ## Method
 
 * Requirements and review comments from the design document (pricing sections ignored as instructed).

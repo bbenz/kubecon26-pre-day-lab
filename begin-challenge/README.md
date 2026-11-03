@@ -103,7 +103,9 @@ kubectl get namespaces -l kubecon.lab/challenge
   begin state to the end state with exact commands.
 * Check progress against the success criteria at any time (only needs `kubectl` and `curl`):
   `scoring/verify.sh --challenges c1` or `./scoring/verify.ps1 -Challenges c1`
-  ([scoring/README.md](../scoring/README.md)). In the begin state every challenge reports **NOT PASSED**.
+  ([scoring/README.md](../scoring/README.md)). In the begin state every challenge reports **NOT PASSED**. On a
+  machine registered for an event leaderboard, each result is also recorded there
+  ([leaderboard/README.md](../leaderboard/README.md)).
 * To compare with the solved configuration, see [`../challenge-end-state`](../challenge-end-state) – the diff between
   a challenge's `manifests/` folders here and there *is* the fix.
 

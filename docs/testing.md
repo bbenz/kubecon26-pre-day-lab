@@ -93,3 +93,21 @@ Second round (2026-11-03, westus3, AKS Automatic 1.36.4) – C2 redesign and A2 
 * Managed Prometheus data (throttling ratio, CPU usage and the recording rules the dashboards use) was checked with
   PromQL against each workspace. **Still to do by a reviewer:** open *Dashboards with Grafana* in the portal and
   confirm the dashboard names and panels the A2 README refers to.
+
+Event leaderboard (2026-11-03, [leaderboard/README.md](../leaderboard/README.md)):
+
+* **Static:** shellcheck, `bash -n`, PowerShell parser, `node --check` of the page's script; the page rendered in
+  headless Edge with hostile input (an HTML-injection name shown as plain text, an over-long Unicode name truncated,
+  path-trick / unknown-challenge / invalid-time records ignored).
+* **Azure:** `setup.sh` + `cleanup.sh -y` on a throwaway leaderboard (created, token tested, resource group and local
+  files deleted); `cleanup.ps1` refused an untagged resource group; `setup.ps1` created the pilot leaderboard
+  (`bbenz-ctf-leaderboard`, container `pilot`) and `setup.sh` re-ran idempotently. Kill switch: a revoked token got
+  403 `AuthenticationFailed`, the reissued token worked, the old one stayed revoked.
+* **Reporting:** `verify.sh` (environment variables) recorded ten flags from the end environment; `verify.ps1`
+  (`join.ps1` registration) recorded progress from the begin environment; the Skillable life cycle actions were
+  simulated with replaced tokens – Windows under Windows PowerShell 5.1 (machine-wide file, "Ada Ö." intact) and Linux
+  through bash (home-directory fallback) – and both verify scripts reported with them. `--quick` and `--no-report` runs
+  were not recorded; a tampered token printed "not recorded (HTTP 403 AuthenticationFailed)" with the exit code
+  unchanged. `tests/leaderboard/simulate-players.ps1` posted 12 demo players (65 records, no failures);
+  `board.ps1` and `board.sh` produced identical data (79 records, 16 players) and the board ranked them correctly;
+  demo records were then removed with `az storage blob delete-batch --auth-mode login`.

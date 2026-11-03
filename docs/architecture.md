@@ -103,6 +103,14 @@ Participants use the metrics through the cluster's **Monitoring → Dashboards w
 (no Grafana instance to deploy). Like the cluster's `MC_…` node resource group, an Azure Monitor workspace has a
 managed resource group (`MA_<workspace>_<region>_managed`) that Azure creates and deletes together with it.
 
+### Event leaderboard (optional)
+
+Separate from the lab environments: one storage account per event in its own resource group
+(`rg-kubecon-ctf-leaderboard`, account `ctflb<8 hex>`), created by `leaderboard/setup.*`. Anonymous access and account
+keys are disabled. `scoring/verify.*` on a registered lab VM writes one record per checked challenge with a create-only
+token (user delegation SAS, at most 7 days); the instructor's laptop reads the records with an Entra sign-in and shows
+them in a static page. No server or compute. Details and security model: [leaderboard/README.md](../leaderboard/README.md).
+
 ### Placeholders
 
 Manifests contain a few `__TOKEN__` placeholders, replaced at deploy time by every approach:

@@ -19,6 +19,7 @@ begin-challenge/          deploy the challenges WITH their faults + participant 
   challenges/<id>-*/      README.md (briefing, success criteria, hints, feasibility), SOLUTION.md, manifests/
 challenge-end-state/      deploy the challenges SOLVED (same structure; README per challenge = what changed)
 scoring/                  verify.sh / verify.ps1 - checks each challenge against its success criteria
+leaderboard/              optional live leaderboard for the lab room (verify results -> projector)
 shared/                   code shared by both states (bash library, PowerShell module, Terraform modules)
 tests/                    local smoke tests on kind (no Azure needed)
 docs/                     prerequisites, architecture, testing
@@ -85,6 +86,14 @@ backs the **A2** dashboards stays in the lab resource group. See [docs/architect
 
 The Kubernetes-only challenges (C1, A1, A2, A3, A5, A6) can be exercised on a local **kind** cluster with the same
 bash library, PowerShell module and Terraform module the Azure deployment uses – see [docs/testing.md](docs/testing.md).
+
+## Event leaderboard (optional)
+
+Lab VMs registered for an event (by a Skillable life cycle action) record every `scoring/verify` result on a central
+leaderboard, which the instructor projects in the room: who has captured which flag, first captures, and progress on
+challenges still in work. It is Azure Blob Storage with anonymous access and account keys disabled; lab VMs get a
+create-only token, the instructor reads with their own Entra sign-in. Setup, security model and event-day steps:
+[leaderboard/README.md](leaderboard/README.md).
 
 ## Status
 

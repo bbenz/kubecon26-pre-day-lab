@@ -15,6 +15,10 @@
     ./scoring/verify.ps1 -Context aks-kubecon-ctf-begin-pwsh -Challenges c1,a3
 .EXAMPLE
     ./scoring/verify.ps1 -Quick                            # shorter observation windows
+
+.NOTES
+    On a machine registered for an event leaderboard, each result is also recorded there
+    (see leaderboard/README.md); -NoReport skips that, -Quick runs are never recorded.
 #>
 #Requires -Version 7.4
 [CmdletBinding()]
@@ -24,7 +28,9 @@ param(
     # Challenge IDs (default: every challenge namespace found).
     [string[]]$Challenges,
     # Shorter waits and observation windows (less strict, for fast iteration).
-    [switch]$Quick
+    [switch]$Quick,
+    # Don't record this run on the event leaderboard.
+    [switch]$NoReport
 )
 $ErrorActionPreference = 'Continue'
 Set-StrictMode -Version 3.0
@@ -116,6 +122,7 @@ function Wait-K8sJob([string]$Namespace, [string]$Job, [int]$TimeoutSeconds) {
 
 . (Join-Path $PSScriptRoot 'lib/VerifyCore.ps1')
 . (Join-Path $PSScriptRoot 'lib/VerifyAlternates.ps1')
+. (Join-Path $PSScriptRoot 'lib/Leaderboard.ps1')
 
 $all = [ordered]@{
     c1 = @('c1-store', "C1 The store won't start");             c2 = @('c2-storefront', 'C2 Move the storefront to Gateway API')
@@ -132,6 +139,7 @@ if (-not $Challenges) {
 $selected = @($Challenges | ForEach-Object { $_ -split '[,\s]+' } | Where-Object { $_ } | ForEach-Object { $_.ToLowerInvariant() })
 
 Write-Host "KubeCon AKS CTF - verification against context '$Context'" -ForegroundColor White
+Initialize-Leaderboard -Disabled $NoReport.IsPresent -Quick $Quick.IsPresent
 $summary = @()
 $overall = 0
 foreach ($id in $all.Keys) {
@@ -140,9 +148,11 @@ foreach ($id in $all.Keys) {
     Write-Host ''
     Write-Host "[$id] $($all[$id][1])" -ForegroundColor White
     & kubectl --context $Context get namespace $all[$id][0] *> $null
-    if ($LASTEXITCODE -ne 0) { Fail "challenge namespace not found - is $id deployed in this context?" }
+    $deployed = ($LASTEXITCODE -eq 0)
+    if (-not $deployed) { Fail "challenge namespace not found - is $id deployed in this context?" }
     else { & "Test-Challenge$($id.ToUpperInvariant())" }
     $result = if ($script:ChFail -eq 0) { 'PASSED' } else { $overall = 1; 'NOT PASSED' }
+    if ($deployed) { Send-LeaderboardResult $id ($script:ChFail -eq 0) $script:ChPass ($script:ChPass + $script:ChFail) }
     $summary += ('  {0,-4} {1,-11} {2,2}/{3,-2} checks  {4}' -f $id, $result, $script:ChPass, ($script:ChPass + $script:ChFail), ($all[$id][1] -replace '^\S+\s', ''))
 }
 Write-Host ''

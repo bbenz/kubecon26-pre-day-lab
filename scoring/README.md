@@ -9,12 +9,14 @@ browser would.
 scoring/verify.sh                                        # every challenge found in the current kubectl context
 scoring/verify.sh --context aks-kubecon-ctf-begin-bash --challenges c1,a3
 scoring/verify.sh --quick                                # shorter waits / 15 s stability window
+scoring/verify.sh --no-report                            # don't record this run on the event leaderboard
 ```
 
 ```powershell
 ./scoring/verify.ps1
 ./scoring/verify.ps1 -Context aks-kubecon-ctf-begin-pwsh -Challenges c1,a3
 ./scoring/verify.ps1 -Quick
+./scoring/verify.ps1 -NoReport                         # don't record this run on the event leaderboard
 ```
 
 Output: `PASS`/`FAIL` per check with short evidence, then a summary; exit code `0` only if every selected challenge
@@ -39,3 +41,12 @@ deployment) it reports **PASSED**.
 Some checks act on the cluster the way a participant would: A3 creates a short-lived Job from the
 `maintenance-check` CronJob (one controlled eviction), A5 starts a rollout of `web`, C1 places one synthetic order
 and A2 runs the bounded load test.
+
+## Leaderboard reporting
+
+On a machine registered for an event leaderboard (by the Skillable life cycle action, `leaderboard/join.*`, or the
+`CTF_LEADERBOARD_URL` / `CTF_PLAYER_ID` / `CTF_PLAYER_NAME` environment variables), both scripts also record each checked
+challenge on the leaderboard: one write-once record with pass/fail and the number of checks passed, sent with a
+create-only token (`curl` in bash, `Invoke-WebRequest` in PowerShell). A failed submission prints one line and never
+changes the result or the exit code. `--no-report` / `-NoReport` skips it; `--quick` / `-Quick` runs are never recorded.
+Machines without a registration behave exactly as before. Details: [leaderboard/README.md](../leaderboard/README.md).
