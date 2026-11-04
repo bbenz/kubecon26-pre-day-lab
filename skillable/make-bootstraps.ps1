@@ -12,7 +12,7 @@
           vm-image\kubecon-ctf-vm-image-setup.ps1, as C:\LabSetup\kubecon-ctf-vm-image-setup.ps1
       lca\manual-begin-state-bootstrap.txt
           lca\prepare-lab-environment.ps1 with Manual = $true, as C:\LabSetup\kubecon-ctf-begin-state.ps1:
-          builds the begin state by hand, as you (LCA-RUNBOOK.md, "Build the begin state by hand")
+          builds the begin state by hand, as you (the LCA runbook, "Build the begin state by hand")
 
     Run this script in Windows PowerShell 5.1 or PowerShell 7 after every change to those scripts, and
     commit the bootstraps with them.

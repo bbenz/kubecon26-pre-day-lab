@@ -8,10 +8,12 @@
 #
 #   ./deploy.sh                          # all challenges in westus3
 #   ./deploy.sh -c c1,c3 -l centralus    # only C1 and C3, another region
+#   ./deploy.sh -g rg-my-ctf -n aks-my-ctf -c c1   # reset C1 in an existing environment
 #   ./deploy.sh --help
 #
-# Participant instructions: ../challenges/<id>-*/README.md
-# Walkthrough to the end state: ../challenges/<id>-*/SOLUTION.md
+# Run it again to reset challenges: it deletes the selected challenges and
+# deploys them again with their faults.
+# Challenge instructions: ../challenges/<id>-*/README.md
 # -----------------------------------------------------------------------------
 set -euo pipefail
 

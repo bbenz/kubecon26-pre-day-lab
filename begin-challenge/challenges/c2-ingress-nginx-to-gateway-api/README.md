@@ -2,12 +2,11 @@
 
 | | |
 |---|---|
-| **Round** | Proposed core, round 2 · Intermediate |
+| **Level** | Intermediate |
 | **Namespace** | `c2-storefront` |
-| **Investigation time (design target)** | 25–30 minutes |
+| **Suggested time** | 25–30 minutes |
 | **Azure services** | AKS Automatic with the **application routing add-on**: managed NGINX (IngressClass `webapprouting.kubernetes.azure.com`) and the add-on's Istio-based **Gateway API** implementation (GatewayClass `approuting-istio`); Azure Load Balancer public IPs with an Azure-provided DNS name |
 | **Tools** | `kubectl`, `curl`, [`ingress2gateway`](https://github.com/kubernetes-sigs/ingress2gateway) (the Kubernetes SIG Network migration tool), an AI assistant of your choice |
-| **Walkthrough to the end state** | [SOLUTION.md](SOLUTION.md) (facilitators only) |
 
 ## Participant briefing
 
@@ -185,16 +184,3 @@ browser – then delete the Ingress.
 begin-challenge/azure-cli-bash/deploy.sh -c c2
 ./begin-challenge/azure-cli-powershell/deploy.ps1 -Challenges c2
 ```
-
----
-
-## Feasibility assessment (evaluation notes)
-
-| Aspect | Assessment |
-|---|---|
-| **Technical feasibility** | **High.** Everything is managed by AKS: the application routing add-on's NGINX (still enabled by `--enable-app-routing` / `az aks approuting enable`) and its Istio-based Gateway API implementation (GatewayClass `approuting-istio`, GA) run side by side, each with its own public IP – exactly the side-by-side pattern of the AKS "Migrate from Ingress-NGINX to Gateway API" guide. `ingress2gateway` v1.2.0 (ingress-nginx provider) translates the Ingress and its annotation; three adaptations are needed: the ingress-class flag, GatewayClass `approuting-istio` and a DNS-label-safe Gateway name. The cutover is a single annotation (`spec.infrastructure.annotations`); Azure's DNS answers have a 10-second TTL. |
-| **Validation status** | See [docs/testing.md](../../../docs/testing.md) for the Azure walkthrough (translation, adaptation, side-by-side test, DNS cutover, decommissioning) and the end-state deployment. |
-| **Fit for 200-level users** | Good. A guided, realistic workflow instead of a hidden fault; the tool's three gaps make the "AI drafts, you verify" lesson concrete without being obscure. Gateway API vocabulary is new to many – the hints name each object. Very topical for KubeCon (Ingress-NGINX retirement) and it shows off AKS features (application routing, managed Gateway API) rather than only kubectl. |
-| **Expected time** | 25–30 min: tool install 2–3 min (pre-install it on lab VMs), translate and adapt ~10 min, gateway provisioning 1–3 min (a new NAP node can add 1–3 min), validation and cutover ~5 min. |
-| **Risks** | (1) **NGINX support window:** Microsoft-supported patches for the add-on's NGINX end in November 2026 – the month of the event. Re-check before the event that `--enable-app-routing` still deploys NGINX on new clusters; fallback: keep the Ingress (it is just YAML) and translate it offline with `--input-file`, dropping the "today's path" test. (2) Participants need `ingress2gateway` and access to an AI assistant (GitHub Copilot Free needs a GitHub account; Copilot in Azure needs the lab tenant to allow it). (3) DNS: negative caching (up to 5 min) if the name is looked up before the cutover; browsers that try HTTPS first. (4) A reset deletes the participant's gateway and its IP. |
-| **Opinion** | **Keep as core round 2 – stronger than the previous "broken route" version.** It answers the pilot feedback (show AKS features, not only Kubernetes troubleshooting), uses the free CNCF tooling plus AI in a realistic way, and every step is observable and verifiable. |

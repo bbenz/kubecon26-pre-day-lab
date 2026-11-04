@@ -3,8 +3,8 @@
 # shellcheck disable=SC2034  # globals defined here are used by the other library modules
 # -----------------------------------------------------------------------------
 # KubeCon AKS capture-the-flag lab - shared bash library (common helpers).
-# Sourced by begin-challenge/azure-cli-bash/*.sh and
-# challenge-end-state/azure-cli-bash/*.sh. Compatible with bash 3.2+ (macOS),
+# Sourced by the deploy and cleanup scripts (begin-challenge/azure-cli-bash/*.sh,
+# and any other state folder's scripts). Compatible with bash 3.2+ (macOS),
 # Git Bash on Windows, WSL, Linux and Azure Cloud Shell.
 # -----------------------------------------------------------------------------
 
@@ -115,7 +115,8 @@ to Microsoft Azure (AKS Automatic) with the Azure CLI.
 Options (environment variable in brackets):
   -c, --challenges LIST    Comma-separated challenge IDs or "all" [CHALLENGES]
                            IDs: ${CTF_ALL_CHALLENGES}   (default: all)
-  -l, --location REGION    Azure region [LOCATION] (default: westus3)
+  -l, --location REGION    Azure region [LOCATION] (default: the resource group's region
+                           when it exists, otherwise westus3)
   -g, --resource-group RG  Resource group [RESOURCE_GROUP] (default: ${DEFAULT_RESOURCE_GROUP})
   -n, --cluster-name NAME  AKS Automatic cluster [CLUSTER_NAME] (default: aks-<resource group without rg->)
       --reset              Delete and re-create the selected challenges first (default: ${CTF_RESET_DEFAULT})
@@ -131,7 +132,7 @@ EOF
 
 ctf_parse_args() {
   CHALLENGES="${CHALLENGES:-all}"
-  LOCATION="${LOCATION:-westus3}"
+  LOCATION="${LOCATION:-}"
   RESOURCE_GROUP="${RESOURCE_GROUP:-$DEFAULT_RESOURCE_GROUP}"
   CLUSTER_NAME="${CLUSTER_NAME:-}"
   CTF_RESET="$CTF_RESET_DEFAULT"
@@ -149,14 +150,12 @@ ctf_parse_args() {
       *)                   die "Unknown option '$1' (see --help)" ;;
     esac
   done
-  LOCATION=$(ctf_lower "$LOCATION" | tr -d ' ')
   CLUSTER_NAME="${CLUSTER_NAME:-aks-${RESOURCE_GROUP#rg-}}"
-  AOAI_LOCATION=$(ctf_lower "${AOAI_LOCATION:-$LOCATION}" | tr -d ' ')
   AOAI_MODEL_NAME="${AOAI_MODEL_NAME:-gpt-6-luna}"
   AOAI_MODEL_VERSION="${AOAI_MODEL_VERSION:-2026-09-22}"
   AOAI_DEPLOYMENT_NAME="${AOAI_DEPLOYMENT_NAME:-store-assistant}"
   AOAI_CAPACITY="${AOAI_CAPACITY:-50}"
-  # C4 is seeded with this retired deployment name; the real deployment must differ.
+  # The deployment name that C4's application starts with can't be the provisioned one.
   [ "$AOAI_DEPLOYMENT_NAME" = "store-assistant-gpt41" ] && \
     die "AOAI_DEPLOYMENT_NAME must not be store-assistant-gpt41 (the stale name challenge C4 starts with)"
   ctf_resolve_challenges
@@ -216,6 +215,14 @@ ctf_preflight() {
 }
 
 ctf_compute_names() {
+  # Without -l, an existing resource group keeps its region: re-running a deployment (a challenge reset) needs
+  # no options beyond the resource group and cluster.
+  if [ -z "$LOCATION" ]; then
+    LOCATION=$(az_tsv group show -n "$RESOURCE_GROUP" --query location 2>/dev/null || true)
+    LOCATION="${LOCATION:-westus3}"
+  fi
+  LOCATION=$(ctf_lower "$LOCATION" | tr -d ' ')
+  AOAI_LOCATION=$(ctf_lower "${AOAI_LOCATION:-$LOCATION}" | tr -d ' ')
   CTF_SUFFIX=$(printf '%s' "${SUBSCRIPTION_ID}/${RESOURCE_GROUP}" | ctf_sha1 | cut -c1-6)
   AOAI_ACCOUNT="aoai-ctf-${CTF_SUFFIX}"
   KEY_VAULT_NAME="kv-ctf-${CTF_SUFFIX}"

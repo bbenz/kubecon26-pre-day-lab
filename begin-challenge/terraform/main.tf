@@ -20,7 +20,7 @@ locals {
     split("-", d)[0] => d
   }
 
-  # A4's federated credential subject lives next to the challenge (seeded fault here).
+  # A4's federated credential subject lives next to the challenge, in azure.env.
   a4_federated_subject = trimspace(regex("(?m)^A4_FEDERATED_SUBJECT=(.+)$", file("${local.challenges_dir}/${local.challenge_dirs["a4"]}/azure.env"))[0])
 
   cluster_name = coalesce(var.cluster_name, "aks-${trimprefix(var.resource_group_name, "rg-")}")

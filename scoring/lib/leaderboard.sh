@@ -3,16 +3,16 @@
 # -----------------------------------------------------------------------------
 # KubeCon AKS capture-the-flag lab - leaderboard reporting for scoring/verify.sh.
 #
-# When this machine is registered for an event leaderboard (by the Skillable
-# life cycle action or leaderboard/join.sh), every challenge that verify.sh
-# checks is recorded on the leaderboard: one small, write-once record per
-# challenge and run, sent with a create-only token. Needs only curl.
-# Nothing happens on machines that aren't registered. See leaderboard/README.md.
+# When this machine is registered for an event leaderboard (by the event's
+# Skillable life cycle action, or by the event team's registration script),
+# every challenge that verify.sh checks is recorded on the leaderboard: one
+# small, write-once record per challenge and run, sent with a create-only
+# token. Needs only curl. Nothing happens on machines that aren't registered.
 #
 # Registration (first match wins):
 #   1. environment: CTF_LEADERBOARD_URL, CTF_PLAYER_ID, CTF_PLAYER_NAME
 #   2. the file named by CTF_LEADERBOARD_CONFIG
-#   3. ~/.kubecon-ctf/leaderboard.env                (leaderboard/join.sh)
+#   3. ~/.kubecon-ctf/leaderboard.env                (registration script)
 #   4. %ProgramData%\kubecon-ctf\leaderboard.env     (Skillable, Windows VM)
 #      /etc/kubecon-ctf/leaderboard.env              (Skillable, Linux VM)
 # -----------------------------------------------------------------------------

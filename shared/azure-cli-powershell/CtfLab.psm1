@@ -1,7 +1,7 @@
 # -----------------------------------------------------------------------------
 # KubeCon AKS capture-the-flag lab - shared PowerShell module (Azure CLI).
-# Imported by begin-challenge/azure-cli-powershell/*.ps1 and
-# challenge-end-state/azure-cli-powershell/*.ps1. Requires PowerShell 7.2+.
+# Imported by the deploy and cleanup scripts (begin-challenge/azure-cli-powershell/*.ps1, and any
+# other state folder's scripts). Requires PowerShell 7.2+.
 # -----------------------------------------------------------------------------
 #Requires -Version 7.2
 Set-StrictMode -Version 3.0

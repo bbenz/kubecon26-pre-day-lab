@@ -1,6 +1,0 @@
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: a6-records
-  labels:
-    kubecon.lab/challenge: a6

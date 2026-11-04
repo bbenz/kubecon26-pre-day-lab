@@ -4,8 +4,8 @@
 # KubeCon AKS capture-the-flag lab - scoring / verification (bash).
 #
 # Checks each challenge against the success criteria from the lab design.
-# Against a BEGIN-state deployment the checks fail (the fault is present);
-# after the expected repair - or against an END-state deployment - they pass.
+# Against a freshly deployed challenge the checks fail (its fault is present);
+# after the expected repair they pass.
 #
 #   scoring/verify.sh                                   # all challenges found in the current context
 #   scoring/verify.sh --context aks-kubecon-ctf-begin-bash --challenges c1,a3
@@ -13,7 +13,7 @@
 #
 # Needs only kubectl (with access to the cluster) and curl. Exit code 0 when
 # every selected challenge passes. On a machine registered for an event
-# leaderboard, each result is also recorded there (leaderboard/README.md).
+# leaderboard, each result is also recorded there (--no-report skips that).
 # -----------------------------------------------------------------------------
 set -uo pipefail
 export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL="*"

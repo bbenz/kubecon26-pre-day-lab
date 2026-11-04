@@ -13,9 +13,14 @@ ctf_ensure_resource_group() {
     az group show -n "$RESOURCE_GROUP" -o none 2>/dev/null || die "Resource group $RESOURCE_GROUP not found (remove --skip-infra)"
     return 0
   fi
+  # An existing resource group stays as it is: its region and tags (a lab platform's own tags, for example).
+  if az group show -n "$RESOURCE_GROUP" -o none 2>/dev/null; then
+    log_ok "resource group exists"
+    return 0
+  fi
   az group create -n "$RESOURCE_GROUP" -l "$LOCATION" --tags purpose=kubecon-ctf "lab-state=$LAB_STATE" \
     --only-show-errors -o none
-  log_ok "resource group ready"
+  log_ok "resource group created"
 }
 
 ctf_ensure_cluster() {
@@ -295,7 +300,7 @@ ctf_ensure_c4_azure() {
   fi
 }
 
-# Reads A4_FEDERATED_SUBJECT from <state>/challenges/a4-*/azure.env (the seeded fault / the fix).
+# Reads A4_FEDERATED_SUBJECT from <state>/challenges/a4-*/azure.env.
 ctf_a4_subject() {
   local env_file
   env_file="$(ctf_challenge_dir a4)/azure.env"

@@ -11,8 +11,10 @@ function New-CtfResourceGroup {
         if (-not (Test-AzCommand group show -n $c.ResourceGroup)) { throw "Resource group $($c.ResourceGroup) not found (remove -SkipInfra)" }
         return
     }
+    # An existing resource group stays as it is: its region and tags (a lab platform's own tags, for example).
+    if (Test-AzCommand group show -n $c.ResourceGroup) { Write-CtfOk 'resource group exists'; return }
     Invoke-AzCommand group create -n $c.ResourceGroup -l $c.Location --tags purpose=kubecon-ctf "lab-state=$($c.State)" -o none | Out-Null
-    Write-CtfOk 'resource group ready'
+    Write-CtfOk 'resource group created'
 }
 
 function Install-CtfCluster {
@@ -280,7 +282,7 @@ function Install-CtfC4Azure {
     }
 }
 
-# Reads A4_FEDERATED_SUBJECT from <state>/challenges/a4-*/azure.env (the seeded fault / the fix).
+# Reads A4_FEDERATED_SUBJECT from <state>/challenges/a4-*/azure.env.
 function Get-CtfA4Subject {
     $envFile = Join-Path (Get-CtfChallengeDir 'a4') 'azure.env'
     $line = Get-Content $envFile | Where-Object { $_ -match '^A4_FEDERATED_SUBJECT=' } | Select-Object -First 1

@@ -1,19 +1,21 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2034  # variables set here are consumed by the shared library
 # -----------------------------------------------------------------------------
-# Local smoke test (no Azure needed): applies the Kubernetes-only challenges to a
-# local kind cluster with the same bash library the Azure deployment uses, so
-# the seeded faults, the fixes and scoring/verify.sh can be exercised quickly.
+# Try the Kubernetes-only challenges without Azure: applies the challenges that
+# need no Azure services (C1, A1, A2, A3, A5, A6) to a local kind cluster with
+# the same bash library the Azure deployment uses, each with its fault in
+# place, and resets them when you run it again.
 #
 #   kind create cluster --name ctf
-#   tests/kind/apply-local.sh begin                 # c1 a1 a2 a3 a5 a6 in their broken state
+#   tests/kind/apply-local.sh begin                 # c1 a1 a2 a3 a5 a6
 #   scoring/verify.sh --context kind-ctf --quick    # expect NOT PASSED
-#   tests/kind/apply-local.sh end                   # solved state on top
-#   scoring/verify.sh --context kind-ctf --quick    # expect PASSED
 #
 # C2 (AKS Gateway API), C3 (node auto-provisioning), C4 (Foundry) and A4
 # (Entra workload identity) need Azure and are not covered here. A1 behaves
-# differently on AKS Automatic (LocalDNS + Cilium) - validate it on Azure too.
+# differently on AKS Automatic - try it on Azure too.
+#
+# CTF_STATE_DIR applies another folder of challenges, with the same layout as
+# begin-challenge (required for any state other than begin).
 # -----------------------------------------------------------------------------
 set -euo pipefail
 
@@ -21,8 +23,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 STATE="${1:?usage: apply-local.sh begin|end [challenge ids...]}"
 shift
 case "$STATE" in
-  begin) LAB_STATE_DIR="$REPO_ROOT/begin-challenge" ;;
-  end)   LAB_STATE_DIR="$REPO_ROOT/challenge-end-state" ;;
+  begin) LAB_STATE_DIR="${CTF_STATE_DIR:-$REPO_ROOT/begin-challenge}" ;;
+  end)   LAB_STATE_DIR="${CTF_STATE_DIR:?set CTF_STATE_DIR to the folder with the end state's challenges}" ;;
   *)     echo "state must be begin or end" >&2; exit 2 ;;
 esac
 LAB_STATE="$STATE"

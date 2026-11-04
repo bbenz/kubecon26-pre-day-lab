@@ -53,7 +53,7 @@ variable "aoai_capacity" {
 }
 
 variable "a4_federated_subject" {
-  description = "Subject of the A4 federated identity credential (the seeded fault in the begin state, the fix in the end state)."
+  description = "Subject of the A4 federated identity credential (from the challenge's azure.env)."
   type        = string
 }
 

@@ -5,20 +5,23 @@
 .DESCRIPTION
     Creates (or reuses) an AKS Automatic cluster plus the Azure services the selected
     challenges need, then deploys each challenge with its seeded fault.
-    Participant instructions: ../challenges/<id>-*/README.md
-    Walkthrough to the end state: ../challenges/<id>-*/SOLUTION.md
+    Run it again to reset challenges: it deletes the selected challenges and deploys them again with their faults.
+    Challenge instructions: ../challenges/<id>-*/README.md
 
 .EXAMPLE
     ./deploy.ps1                                  # all challenges in westus3
 .EXAMPLE
     ./deploy.ps1 -Challenges c1,c3 -Location centralus
+.EXAMPLE
+    ./deploy.ps1 -ResourceGroup rg-my-ctf -ClusterName aks-my-ctf -Challenges c1   # reset C1 in an existing environment
 #>
 #Requires -Version 7.4
 [CmdletBinding()]
 param(
     # Challenge IDs (c1 c2 c3 c4 a1 a2 a3 a4 a5 a6) or 'all'.
     [string[]]$Challenges = $(if ($env:CHALLENGES) { $env:CHALLENGES } else { 'all' }),
-    [string]$Location = $(if ($env:LOCATION) { $env:LOCATION } else { 'westus3' }),
+    # Default: the resource group's region when it exists, otherwise westus3.
+    [string]$Location = $env:LOCATION,
     [string]$ResourceGroup = $(if ($env:RESOURCE_GROUP) { $env:RESOURCE_GROUP } else { 'rg-kubecon-ctf-begin-pwsh' }),
     # Defaults to aks-<resource group without the rg- prefix>.
     [string]$ClusterName = $env:CLUSTER_NAME,

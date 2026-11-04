@@ -2,11 +2,10 @@
 
 | | |
 |---|---|
-| **Round** | Additional candidate (timing risk) · Intermediate |
+| **Level** | Intermediate |
 | **Namespace** | `a6-records` |
-| **Investigation time (design target)** | 20–25 minutes |
+| **Suggested time** | 20–25 minutes |
 | **Azure services** | AKS Automatic with Azure Disk (CSI, `managed-csi`, ReadWriteOnce) |
-| **Walkthrough to the end state** | [SOLUTION.md](SOLUTION.md) (facilitators only) |
 
 ## Participant briefing
 
@@ -75,16 +74,3 @@ Explain why restoring availability with a new empty volume would not satisfy the
 begin-challenge/azure-cli-bash/deploy.sh -c a6        # re-creates the namespace, disk and seed data
 ./begin-challenge/azure-cli-powershell/deploy.ps1 -Challenges a6
 ```
-
----
-
-## Feasibility assessment (evaluation notes)
-
-| Aspect | Assessment |
-|---|---|
-| **Technical feasibility** | **High (Kubernetes) / medium (timing on Azure).** The Deployment references a non-existent claim → pod `Pending` with `persistentvolumeclaim "records-data-v2" not found`. The original claim, disk and seeded data stay intact (the seed Job runs in a setup phase *before* the app is deployed, so there is no attach race). The readiness probe checks dataset presence and checksum, so the "new empty volume" bypass visibly fails. Deployment strategy `Recreate` avoids two pods fighting over the RWO disk. |
-| **Validation status** | Fault, fix and scoring validated locally with bash, PowerShell and Terraform (local-path storage) and **on AKS Automatic 1.35 (westus3, 2026-10-14)** with Azure Disk (`managed-csi`): the seed Job including disk provisioning took ~1.5 min at deploy time; after the fix `records-api` was Ready 21 s after creation and served the 500 records with an unchanged checksum. |
-| **Fit for 200-level users** | Good – the event names the missing claim directly; PVC/PV basics are core knowledge. The interesting part is resisting the "just create the missing PVC" reflex. |
-| **Expected time** | 10–15 min + 1–3 min attach/scheduling → may finish early. |
-| **Risks** | Zonal disk + node placement latency; transient `Multi-Attach` events if the app lands on a different node from the (completed) seed pod while Azure detaches the disk – resolves on its own within ~1 min. |
-| **Opinion** | **Reserve.** Reliable and safe, but somewhat easy and the waiting time is mostly attach latency; use it if a storage topic is wanted. |

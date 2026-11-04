@@ -122,7 +122,8 @@ function Initialize-CtfLab {
         [Parameter(Mandatory)][string]$RepoRoot,
         [Parameter(Mandatory)][string]$ResourceGroup,
         [string[]]$Challenges = @('all'),
-        [string]$Location = 'westus3',
+        # Empty: the resource group's region when it exists, otherwise westus3 (resolved by Test-CtfPrerequisites).
+        [string]$Location = '',
         [string]$ClusterName,
         [bool]$Reset = $false,
         [bool]$SkipInfra = $false,
@@ -130,21 +131,28 @@ function Initialize-CtfLab {
         [string]$ModelVersion = '2026-09-22',
         [string]$DeploymentName = 'store-assistant',
         [int]$ModelCapacity = 50,
-        [string]$AoaiLocation
+        [string]$AoaiLocation,
+        # The folder with the state's challenges/<id>-*/manifests. Default: begin-challenge in the repository for the
+        # begin state; another state (in another repository, for example) passes its own folder.
+        [string]$StateDir
     )
-    # C4 is seeded with this retired deployment name; the real deployment must differ.
+    # The deployment name that C4's application starts with can't be the provisioned one.
     if ($DeploymentName -eq 'store-assistant-gpt41') { throw 'DeploymentName must not be store-assistant-gpt41 (the stale name challenge C4 starts with)' }
-    $stateFolder = if ($State -eq 'begin') { 'begin-challenge' } else { 'challenge-end-state' }
+    if (-not $StateDir) {
+        if ($State -ne 'begin') { throw "Pass -StateDir with the folder that has the $State state's challenges" }
+        $StateDir = Join-Path $RepoRoot 'begin-challenge'
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $StateDir 'challenges'))) { throw "$StateDir has no challenges folder" }
     $location = ($Location -replace '\s', '').ToLowerInvariant()
     $script:Ctf = [ordered]@{
         State          = $State
         StateTitle     = if ($State -eq 'begin') { 'BEGIN state (challenges with their seeded faults)' } else { 'END state (challenges solved)' }
         RepoRoot       = (Resolve-Path $RepoRoot).Path
-        StateDir       = Join-Path (Resolve-Path $RepoRoot).Path $stateFolder
+        StateDir       = (Resolve-Path -LiteralPath $StateDir).Path
         ResourceGroup  = $ResourceGroup
         ClusterName    = if ($ClusterName) { $ClusterName } else { 'aks-' + ($ResourceGroup -replace '^rg-', '') }
         Location       = $location
-        AoaiLocation   = if ($AoaiLocation) { ($AoaiLocation -replace '\s', '').ToLowerInvariant() } else { $location }
+        AoaiLocation   = ($AoaiLocation -replace '\s', '').ToLowerInvariant()
         Reset          = $Reset
         SkipInfra      = $SkipInfra
         ModelName      = $ModelName
@@ -182,6 +190,13 @@ function Test-CtfPrerequisites {
         $script:Ctf.NoExtDir = (New-Item -ItemType Directory -Path (Join-Path ([IO.Path]::GetTempPath()) "ctf-noext-$PID") -Force).FullName
         Write-CtfWarn 'aks-preview extension detected - az aks create/update will use the core (GA) Azure CLI commands'
     }
+    # Without -Location, an existing resource group keeps its region: re-running a deployment (a challenge reset)
+    # needs no options beyond the resource group and cluster.
+    if (-not $script:Ctf.Location) {
+        $groupLocation = Invoke-AzTsv group show -n $script:Ctf.ResourceGroup --query location
+        $script:Ctf.Location = if ($groupLocation) { $groupLocation.ToLowerInvariant() } else { 'westus3' }
+    }
+    if (-not $script:Ctf.AoaiLocation) { $script:Ctf.AoaiLocation = $script:Ctf.Location }
     # Deterministic, globally unique names (same algorithm as the bash and Terraform deployments).
     $suffix = Get-CtfSha1Prefix "$($script:Ctf.SubscriptionId)/$($script:Ctf.ResourceGroup)"
     $script:Ctf.Suffix = $suffix

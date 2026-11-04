@@ -5,7 +5,7 @@
 | Requirement | Why | Check |
 |---|---|---|
 | Subscription where you are **Owner** (or Contributor + User Access Administrator / Role Based Access Control Administrator) | The deployment creates role assignments (AKS RBAC Cluster Admin for you; roles for the C4/A4 managed identities). | `az role assignment list --assignee $(az ad signed-in-user show --query id -o tsv) --scope /subscriptions/<id> -o table` |
-| Resource providers registered: `Microsoft.ContainerService`, `Microsoft.Compute`, `Microsoft.Network`, `Microsoft.ManagedIdentity`, `Microsoft.PolicyInsights`, `Microsoft.CognitiveServices` (C4), `Microsoft.KeyVault` (A4), `Microsoft.Monitor`, `Microsoft.Insights`, `Microsoft.OperationalInsights`, `Microsoft.AlertsManagement`, `Microsoft.Dashboard`, `Microsoft.Storage` (leaderboard) | AKS Automatic enables Azure Policy (deployment safeguards) and monitoring (Managed Prometheus data collection rules are `Microsoft.Insights` resources). | `az provider show -n Microsoft.PolicyInsights --query registrationState` / `az provider register -n <namespace>` |
+| Resource providers registered: `Microsoft.ContainerService`, `Microsoft.Compute`, `Microsoft.Network`, `Microsoft.ManagedIdentity`, `Microsoft.PolicyInsights`, `Microsoft.CognitiveServices` (C4), `Microsoft.KeyVault` (A4), `Microsoft.Monitor`, `Microsoft.Insights`, `Microsoft.OperationalInsights`, `Microsoft.AlertsManagement`, `Microsoft.Dashboard` | AKS Automatic enables Azure Policy (deployment safeguards) and monitoring (Managed Prometheus data collection rules are `Microsoft.Insights` resources). | `az provider show -n Microsoft.PolicyInsights --query registrationState` / `az provider register -n <namespace>` |
 | A region where **AKS Automatic** is GA (see the [quickstart's list](https://learn.microsoft.com/azure/aks/automatic/quick-automatic-managed-network)) and that your organization's Azure Policy allows | Default: `westus3`. Check for location restrictions with `az policy assignment list --disable-scope-strict-match -o table`. | |
 | vCPU quota for general-purpose **D-family** VMs in that region (≈ 16–24 vCPUs for all ten challenges) | Node auto-provisioning creates workload nodes on demand. System components run on AKS-managed nodes and need no quota. | `az vm list-usage -l <region> -o table` |
 | **D-series sizes not restricted** for your subscription in the region (all zones) | Some subscriptions can't use certain series in certain zones; NAP skips restricted sizes, C3's fix must name allowed ones. | `az vm list-skus -l <region> --size Standard_D2s --query "[].{name:name, restrictions:restrictions[].reasonCode}" -o table` |
@@ -37,9 +37,8 @@ all GA (Azure CLI ≥ 2.86).
 Azure Cloud Shell includes the Azure CLI, `kubectl`, PowerShell 7 and Terraform; run `az aks install-cli` if
 `kubelogin` is missing. `ingress2gateway` is not included – download the Linux release (see the C2 README).
 
-The Skillable lab VM image installs all of these, plus AKS desktop, Inspektor Gadget, the GitHub CLI, the
-`aks-agent` Azure CLI extension, and VS Code with GitHub Copilot and AKS-MCP:
-[skillable/vm-image/VM-IMAGE-RUNBOOK.md](../skillable/vm-image/VM-IMAGE-RUNBOOK.md).
+The hosted lab's VM image installs all of these, plus AKS desktop, Inspektor Gadget, the GitHub CLI, the
+`aks-agent` Azure CLI extension, and VS Code with GitHub Copilot and AKS-MCP: [skillable/README.md](../skillable/README.md).
 
 ### The `aks-preview` extension
 
@@ -67,18 +66,5 @@ CLI's current subscription is in another tenant (the deploy scripts and Terrafor
 The deploy scripts read the signed-in identity's object ID from its own access token, so a service principal
 without Microsoft Graph permissions (such as Skillable's cloud subscription identity) can deploy too.
 
-## Participant permissions
-
-What each challenge needs. In Skillable, the cloud portal user has Contributor on the resource group, and the
-prepare life cycle action adds AKS RBAC Cluster Admin and Monitoring Data Reader on the resource group, and Managed
-Identity Contributor on A4's identity ([skillable/lca/LCA-RUNBOOK.md](../skillable/lca/LCA-RUNBOOK.md#identities-and-roles)):
-
-| Challenge | Kubernetes | Azure |
-|---|---|---|
-| All | RBAC Cluster Admin (or Admin on the challenge namespaces + read on nodes/NodePools) | Reader on the resource group |
-| C2 | create Gateways/HTTPRoutes and delete Ingresses in `c2-storefront`; read IngressClasses, GatewayClasses and `nginxingresscontrollers` (cluster-scoped) | – (the cutover is a Kubernetes annotation; Azure creates the DNS name). The optional production step `az aks approuting update --nginx None` would need write access to the cluster – not part of the lab |
-| C3 | edit `nodepools.karpenter.sh` (cluster-scoped) | – |
-| C4 | – | read Foundry deployments (`az cognitiveservices account deployment list`) |
-| A2 | – | open **Dashboards with Grafana** on the cluster: read access to the Azure Monitor workspace's data. Owner worked in testing (no extra role); with a narrower role add **Monitoring Data Reader** on the workspace (`amw-ctf-<id>` in the lab resource group). `kubectl top` and `/stats` work without it |
-| A4 | – | update federated credentials on `id-ctf-config-reader` (Managed Identity Contributor on the identity, or resource-group Contributor) |
-| Leaderboard (optional) | – | none: lab VMs only need outbound HTTPS to the leaderboard's storage account (`<account>.blob.core.windows.net`) and `curl` for `verify.sh`; the token comes from a Skillable life cycle action. The **instructor** needs Storage Blob Data Reader on that account to show the board ([leaderboard/README.md](../leaderboard/README.md)) |
+Deployed as the subscription's Owner, you have every permission that the challenges need: the deployment gives you
+**Azure Kubernetes Service RBAC Cluster Admin**, and Owner covers the Azure side.

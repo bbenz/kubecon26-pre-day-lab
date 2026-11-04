@@ -1,7 +1,7 @@
 # -----------------------------------------------------------------------------
 # Challenge A4: Key Vault with a harmless lab value, and the managed identity
 # the config-reader app federates with. Created only when a4 is selected.
-# The federated credential subject is the seeded fault (begin) or the fix (end).
+# The federated credential subject comes from the challenge's azure.env.
 # Mirrors ctf_ensure_a4_azure in shared/azure-cli-bash/lib/azure.sh.
 # -----------------------------------------------------------------------------
 

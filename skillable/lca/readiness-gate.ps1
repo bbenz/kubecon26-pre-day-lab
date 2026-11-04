@@ -16,29 +16,28 @@
         "Your lab environment isn't ready. Ask a proctor for another lab."
 
     Results: C:\ProgramData\kubecon-ctf-lca (state-verify.json and the newest verify-*.log), and a copy
-    of the log in setup-logs in the attendee folder. skillable\lca\LCA-RUNBOOK.md has the details.
+    of the log in .lab\skillable in the lab repository. The lab team's LCA runbook has the details.
 #>
 $lca = 'C:\ProgramData\kubecon-ctf-lca'
-$worker = Join-Path $lca 'Invoke-CtfLabSetup.ps1'
 $pwsh = 'C:\Program Files\PowerShell\7\pwsh.exe'
+$config = Get-Content -LiteralPath (Join-Path $lca 'config.json') -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
+$worker = if ($config.LabRoot) { Join-Path $config.LabRoot 'skillable\lca\Invoke-CtfLabSetup.ps1' } else { '' }
 $state = $null
 $code = 1
 # Windows PowerShell 5.1 turns a native tool's stderr into errors when ErrorActionPreference is Stop.
 $ErrorActionPreference = 'Continue'
-if ((Test-Path -LiteralPath $worker) -and (Test-Path -LiteralPath (Join-Path $lca 'config.json'))) {
+if ($worker -and (Test-Path -LiteralPath $worker)) {
     & $pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $worker -Mode Verify -LaunchedAt (Get-Date).ToString('o') | Out-Null
     $code = $LASTEXITCODE
     $state = Get-Content -LiteralPath (Join-Path $lca 'state-verify.json') -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
 }
 $removed = $state -and @($state.checks | Where-Object { $_.check -eq 'Cloud credentials removed' -and $_.result -eq 'PASS' }).Count -gt 0
-$keep = (Get-Content -LiteralPath (Join-Path $lca 'config.json') -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json).RemoveCredentials -eq 'Never'
+$keep = $config.RemoveCredentials -eq 'Never'
 if (-not $removed -and -not $keep) {
     # The worker didn't run, or didn't finish: remove the service principal's profile and the PowerShell event logs here.
     Remove-Item -LiteralPath (Join-Path $lca 'azure-cli') -Recurse -Force -ErrorAction SilentlyContinue
     foreach ($log in 'Microsoft-Windows-PowerShell/Operational', 'PowerShellCore/Operational', 'Windows PowerShell') { & wevtutil.exe cl $log 2>$null }
 }
-# The prepare LCA's clone of the lab repository has the solutions. The worker deletes it; make sure.
-Remove-Item -LiteralPath (Join-Path $lca 'repo') -Recurse -Force -ErrorAction SilentlyContinue
 if (-not $state) { throw 'KubeCon CTF readiness gate failed. The prepare life cycle action did not finish in this VM.' }
 $end = "Summary for troubleshooting: $($state.setupLog)"
 if ($code -ne 0 -or $state.status -eq 'Failed') { throw "KubeCon CTF readiness gate failed. $($state.message) $end" }

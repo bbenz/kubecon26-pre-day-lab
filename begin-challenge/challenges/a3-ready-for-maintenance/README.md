@@ -2,11 +2,10 @@
 
 | | |
 |---|---|
-| **Round** | Reserve · Intermediate–advanced (no real cluster upgrade) |
+| **Level** | Intermediate–advanced |
 | **Namespace** | `a3-maintenance` |
-| **Investigation time (design target)** | 20–25 minutes |
+| **Suggested time** | 20–25 minutes |
 | **Azure services** | AKS Automatic only |
-| **Walkthrough to the end state** | [SOLUTION.md](SOLUTION.md) (facilitators only) |
 
 ## Participant briefing
 
@@ -82,16 +81,3 @@ affect maintenance.
 begin-challenge/azure-cli-bash/deploy.sh -c a3
 ./begin-challenge/azure-cli-powershell/deploy.ps1 -Challenges a3
 ```
-
----
-
-## Feasibility assessment (evaluation notes)
-
-| Aspect | Assessment |
-|---|---|
-| **Technical feasibility** | **High.** AKS Automatic's deployment safeguards do **not** inspect PodDisruptionBudgets, so a one-replica Deployment with `minAvailable: 1` (0 disruptions allowed) stays broken. The in-cluster `maintenance-check` Job uses its own narrowly scoped RBAC to request evictions – no node drains, no real upgrade, nothing that affects other rounds. The app drains gracefully (`preStop`), so the only failure is the one being taught. Safeguards add anti-affinity when replicas > 1; the manifest pre-sets a topology spread so this does not surprise participants. |
-| **Validation status** | Fault, fix and scoring validated locally with bash, PowerShell and Terraform (begin: eviction `429`; end: eviction accepted, 0 failed requests) and **on AKS Automatic 1.35 (westus3, 2026-10-14)** with the same results (end: 31 requests, 0 failed during the eviction). |
-| **Fit for 200-level users** | Good, slightly easy: the check output names the PDB, and `kubectl get pdb` shows `ALLOWED DISRUPTIONS 0`. The `kubectl create job --from=cronjob` pattern is new to some participants but given in the brief. |
-| **Expected time** | 10–15 min – may finish early; use the stretch objective to fill the round. |
-| **Risks** | Low. A second replica may need a new NAP node (1–3 min). |
-| **Opinion** | **Good reserve / easy round.** Reliable and safe; less depth than the others, so pair it with the stretch discussion about AKS upgrades. |

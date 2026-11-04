@@ -108,9 +108,8 @@ ctf_apply_challenge() {
 }
 
 # Deletes objects listed in <challenge>/prune.txt (one <resource>/<name> per line,
-# # comments allowed): objects of the begin state that the end state no longer
-# has, for example C2's legacy Ingress. Lets the end state be applied on top of
-# a begin-state deployment ("solve in place").
+# # comments allowed): objects that an earlier state of the challenge had and
+# this state doesn't, so that one state can be applied on top of another.
 ctf_prune_challenge() {
   local id=$1 ns=$2 list ref
   list="$(ctf_challenge_dir "$id")/prune.txt"

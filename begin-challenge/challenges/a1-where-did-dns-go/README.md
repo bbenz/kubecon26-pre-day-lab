@@ -2,11 +2,10 @@
 
 | | |
 |---|---|
-| **Round** | Preferred alternate · Intermediate |
+| **Level** | Intermediate |
 | **Namespace** | `a1-inventory` |
-| **Investigation time (design target)** | 20–25 minutes |
+| **Suggested time** | 20–25 minutes |
 | **Azure services** | AKS Automatic (Azure CNI powered by Cilium enforces NetworkPolicy; LocalDNS) |
-| **Walkthrough to the end state** | [SOLUTION.md](SOLUTION.md) (facilitators only) |
 
 ## Participant briefing
 
@@ -96,16 +95,3 @@ available in your environment.)
 begin-challenge/azure-cli-bash/deploy.sh -c a1
 ./begin-challenge/azure-cli-powershell/deploy.ps1 -Challenges a1
 ```
-
----
-
-## Feasibility assessment (evaluation notes)
-
-| Aspect | Assessment |
-|---|---|
-| **Technical feasibility** | **Medium-high – validated on Azure (2026-10-14).** The fault is deterministic: default-deny egress + an allow rule for the catalog only → `Temporary failure in name resolution`. **AKS Automatic twist:** pods resolve through LocalDNS (node-local `169.254.10.11`), and Cilium treats that traffic as the `host` entity, so the *textbook* fixes – allow 53 to the `kube-dns` pods, or `ipBlock` 169.254.10.x – **do not work** (verified). Working fixes (both verified): a port-only NetworkPolicy rule (UDP/TCP 53, no destination – the end state) or a `CiliumNetworkPolicy` with `toEntities: [host]` (least privilege). `ledger-api` and the internet stay blocked with either. |
-| **Validation status** | Fault, fix and scoring validated locally (bash, PowerShell, Terraform) and on AKS Automatic 1.35 in westus3: begin state fails as designed; both fixes pass. |
-| **Fit for 200-level users** | **Medium-low without hint 4, medium with it.** "DNS vs connectivity" is a valuable skill, but on AKS Automatic the first fix most people know fails silently, and the reason (LocalDNS + Cilium `host` entity) is advanced. Hint 4 turns it into a solvable – and memorable – platform lesson. |
-| **Expected time** | 20–30 min with hints 1–4 (25+ min if participants try `ipBlock`/kube-dns variations first). |
-| **Risks** | Participants burning the round on the textbook rule; facilitators should release hint 4 at ~10 minutes. Inspektor Gadget: its AKS cluster extension (`microsoft.inspektorgadget`, preview) runs its privileged pods on the lab's nodes on AKS Automatic (tested 2026-11-03), but AKS denies them on the AKS-managed hosted system nodes, so the extension can stay in *Creating*, and a full node leaves its pod Pending – keep it optional (the Skillable prepare LCA's `InspektorGadget` setting is off by default). |
-| **Opinion** | **Alternate for an advanced round, or with hint 4 released early.** Excellent debrief material (LocalDNS, Cilium entities, DNS as an exfiltration path), but A2 or A5 are smoother substitutes for a 200-level core round. |

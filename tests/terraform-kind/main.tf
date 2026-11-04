@@ -4,11 +4,11 @@
 #
 #   kind create cluster --name ctf
 #   cd tests/terraform-kind && terraform init
-#   terraform apply -var state=begin   # then: scoring/verify.sh --context kind-ctf --quick  (NOT PASSED)
-#   terraform apply -var state=end     # then: scoring/verify.sh --context kind-ctf --quick  (PASSED)
+#   terraform apply                    # then: scoring/verify.sh --context kind-ctf --quick  (NOT PASSED)
 #   terraform destroy
 #
-# Covers the Kubernetes-only challenges (C1, A1, A2, A3, A5, A6).
+# Covers the Kubernetes-only challenges (C1, A1, A2, A3, A5, A6). challenges_dir
+# applies another folder of challenges, with the same layout as begin-challenge.
 # -----------------------------------------------------------------------------
 terraform {
   required_version = ">= 1.9.0"
@@ -20,9 +20,10 @@ terraform {
   }
 }
 
-variable "state" {
-  type    = string
-  default = "begin"
+variable "challenges_dir" {
+  description = "Folder with <id>-*/manifests (default: begin-challenge/challenges in this repository)."
+  type        = string
+  default     = ""
 }
 
 variable "challenges" {
@@ -41,7 +42,7 @@ provider "kubectl" {
 }
 
 locals {
-  challenges_dir = "${path.module}/../../${var.state == "begin" ? "begin-challenge" : "challenge-end-state"}/challenges"
+  challenges_dir = var.challenges_dir != "" ? var.challenges_dir : "${path.module}/../../begin-challenge/challenges"
   challenge_dirs = {
     for d in distinct([for f in fileset(local.challenges_dir, "*/manifests/*.yaml") : split("/", f)[0]]) :
     split("-", d)[0] => d

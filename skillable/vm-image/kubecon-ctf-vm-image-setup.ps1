@@ -24,9 +24,9 @@
       11. WSL with Ubuntu, a default user with passwordless sudo and no first-run prompts, and the Azure CLI,
           kubectl, kubelogin, Helm, and jq inside Ubuntu. WSL 2 when the VM exposes virtualization, WSL 1
           otherwise. Turning on the Windows features needs one restart: restart, then run the script again.
-      12. The lab folder C:\lab-resources, which the prepare LCA fills at each launch with the challenges'
-          instructions and the scripts that check and reset them (never the solutions: the image has no copy
-          of the lab repository), and shortcuts that open VS Code on it and Edge on the Azure portal at sign-in
+      12. The lab repository, a shallow clone (no history) in C:\LabFiles\kubecon26-pre-day-lab, and shortcuts
+          that open VS Code on it and Edge on the Azure portal at sign-in. The repository has no solutions: they
+          are in the instructors' repository, and the verification fails if any are in the lab folder
 
     Each item prints "READY:" when it's installed and verified, and the run ends with a verification
     table. The script is safe to run again: it skips or reapplies finished items.
@@ -40,6 +40,12 @@
 .PARAMETER KubectlMinor
     Kubernetes minor version for kubectl. Keep it within one minor version of the lab cluster.
 
+.PARAMETER RepoUrl
+    The lab repository to clone. The prepare LCA moves the clone to its own RepoRef at each launch.
+
+.PARAMETER RepoRef
+    The branch or tag of the lab repository to clone.
+
 .PARAMETER WslDistribution
     The WSL distribution to install, by its name in the official WSL distribution list.
 
@@ -48,7 +54,7 @@
 
 .PARAMETER Finalize
     Prepares the VM for the differencing disk commit: verifies the image; removes setup files, caches,
-    history, any credentials, and the state of any LCA test run (the lab folder goes back to its placeholder);
+    history, any credentials, and the state of any LCA test run, including the lab folder's deployment state;
     and shuts down the VM.
 
 .PARAMETER NoShutdown
@@ -67,6 +73,9 @@
 param(
     [ValidatePattern('^\d+\.\d+$')]
     [string]$KubectlMinor = '1.36',
+    [string]$RepoUrl = 'https://github.com/bbenz/kubecon26-pre-day-lab',
+    [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._/-]*$')]
+    [string]$RepoRef = 'main',
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]*$')]
     [string]$WslDistribution = 'Ubuntu-24.04',
     [ValidatePattern('^$|^[a-z_][a-z0-9_-]{0,31}$')]
@@ -82,9 +91,7 @@ $ProgressPreference = 'SilentlyContinue'
     [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
 $LabName      = 'KubeCon CTF'
-# The attendee folder. The image has no copy of the lab repository, because the repository has the solutions.
-$LabResources = 'C:\lab-resources'
-$OldRepoClone = 'C:\LabFiles\kubecon26-pre-day-lab'   # Where an earlier version of this script cloned the repository
+$LabRoot      = 'C:\LabFiles\kubecon26-pre-day-lab'
 $LcaStateDir  = 'C:\ProgramData\kubecon-ctf-lca'       # The LCAs' settings, state, and logs: per launch, never in the image
 $SetupDir     = 'C:\LabSetup'
 $DownloadDir  = 'C:\LabSetup\downloads'
@@ -868,6 +875,7 @@ function Set-EdgePolicies {
     $favorites = @(
         [ordered]@{ toplevel_name = $LabName },
         [ordered]@{ name = 'Azure portal'; url = $PortalUrl },
+        [ordered]@{ name = 'Lab repository'; url = 'https://aka.ms/kubecon26-pre-day-lab' },
         [ordered]@{ name = 'AKS documentation'; url = 'https://learn.microsoft.com/azure/aks/' },
         [ordered]@{ name = 'Gateway API'; url = 'https://gateway-api.sigs.k8s.io/' }
     )
@@ -1074,44 +1082,61 @@ function Install-Wsl {
                  "passwordless sudo, no first-run prompts; $($Versions['wslTools'])")
 }
 
-function Set-LabPlaceholder {
-    # The prepare LCA replaces it with the challenges' instructions and the check and reset scripts at each launch.
-    New-Item -ItemType Directory -Path $LabResources -Force | Out-Null
-    $text = "# KubeCon AKS capture-the-flag lab`r`n`r`nThe lab's files appear in this folder when your lab environment is ready: " +
-            "the challenges' instructions, and the scripts that check your work and start a challenge over. If this is still " +
-            "the only file here after the lab starts, ask a proctor.`r`n"
-    [IO.File]::WriteAllText((Join-Path $LabResources 'README.md'), $text, (New-Object Text.UTF8Encoding($false)))
+function Invoke-LabGit([string[]]$Arguments) {
+    # Trusts the lab folder for any user, never prompts for credentials, and gives up on a stalled download.
+    $all = @('-c', 'safe.directory=*', '-c', 'credential.helper=', '-c', 'http.lowSpeedLimit=1000', '-c', 'http.lowSpeedTime=60') + $Arguments
+    $out = Invoke-Native { & $GitExe @all 2>&1 }
+    return [pscustomobject]@{ Code = $LASTEXITCODE; Text = ((@($out) | ForEach-Object { "$_" }) -join ' ').Trim() }
 }
 
-function Find-RepositoryContent {
-    # The image must not have the lab repository or its solutions: attendees use this VM.
+function Find-SolutionContent {
+    # Attendees use this VM: the lab folder must not have the solutions, in its files or in its git history. They are
+    # in the instructors' repository; a clone of an older version of the lab repository still had them.
     $found = New-Object System.Collections.Generic.List[string]
-    if (Test-Path -LiteralPath $OldRepoClone) { $found.Add($OldRepoClone) }
-    foreach ($root in $LabResources, 'C:\LabFiles') {
-        if (-not (Test-Path -LiteralPath $root)) { continue }
-        Get-ChildItem -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue | Where-Object {
-            ($_.PSIsContainer -and ($_.Name -eq 'challenge-end-state' -or $_.Name -eq '.git')) -or
-            (-not $_.PSIsContainer -and $_.Name -eq 'SOLUTION.md')
-        } | ForEach-Object { $found.Add($_.FullName) }
+    if (-not (Test-Path -LiteralPath $LabRoot)) { return $found.ToArray() }
+    Get-ChildItem -LiteralPath $LabRoot -Recurse -Force -ErrorAction SilentlyContinue | Where-Object {
+        ($_.PSIsContainer -and $_.Name -eq 'challenge-end-state') -or (-not $_.PSIsContainer -and $_.Name -in 'SOLUTION.md', 'FEASIBILITY.md')
+    } | ForEach-Object { $found.Add($_.FullName) }
+    if (Test-Path -LiteralPath (Join-Path $LabRoot '.git')) {
+        $history = Invoke-LabGit @('-C', $LabRoot, 'log', '--all', '--format=%h', '--', ':(glob)**/SOLUTION.md', 'FEASIBILITY.md', 'challenge-end-state')
+        if ($history.Code -ne 0) { $found.Add("git history (couldn't read it: $($history.Text))") }
+        elseif ($history.Text) { $found.Add("git history: commits $($history.Text)") }
     }
     return $found.ToArray()
 }
 
 function Set-LabFolderAndStartup {
-    # The attendee folder. At each launch, the prepare LCA clones the lab repository at the event's tag, fills this
-    # folder from it without the solutions, and deletes the clone.
-    $removed = ''
-    if (Test-Path -LiteralPath $OldRepoClone) {
-        Remove-Item -LiteralPath $OldRepoClone -Recurse -Force
-        $parent = Split-Path -Parent $OldRepoClone
-        if (-not (Get-ChildItem -LiteralPath $parent -Force -ErrorAction SilentlyContinue)) { Remove-Item -LiteralPath $parent -Force }
-        $removed = " Removed the lab repository clone that an earlier version of this script made in $OldRepoClone."
+    # The lab repository, with no history: a shallow clone of one commit. At each launch, the prepare LCA moves it to
+    # the event's tag the same way.
+    New-Item -ItemType Directory -Path (Split-Path -Parent $LabRoot) -Force | Out-Null
+    $env:GIT_TERMINAL_PROMPT = '0'
+    if (-not (Test-Path -LiteralPath (Join-Path $LabRoot '.git'))) {
+        if ((Test-Path -LiteralPath $LabRoot) -and (Get-ChildItem -LiteralPath $LabRoot -Force | Select-Object -First 1)) {
+            throw "$LabRoot exists, but it isn't a clone of the lab repository. Move it away, and run the script again."
+        }
+        $clone = Invoke-LabGit @('clone', '--quiet', '--depth', '1', '--branch', $RepoRef, $RepoUrl, $LabRoot)
+        if ($clone.Code -ne 0) { throw "git clone of $RepoRef from $RepoUrl failed: $($clone.Text)" }
+        $checkout = Invoke-LabGit @('-C', $LabRoot, 'checkout', '--quiet', '-B', 'lab')
+    } else {
+        $fetch = Invoke-LabGit @('-C', $LabRoot, 'fetch', '--quiet', '--force', '--depth', '1', $RepoUrl, $RepoRef)
+        if ($fetch.Code -ne 0) { throw "git fetch of $RepoRef from $RepoUrl failed: $($fetch.Text)" }
+        $checkout = Invoke-LabGit @('-C', $LabRoot, 'checkout', '--quiet', '--force', '-B', 'lab', 'FETCH_HEAD')
     }
-    $oldSafe = $OldRepoClone -replace '\\', '/'
-    if (@(Invoke-Native { & $GitExe config --system --get-all safe.directory 2>$null }) -contains $oldSafe) {
-        Invoke-Native { & $GitExe config --system --unset-all safe.directory ('^' + [regex]::Escape($oldSafe) + '$') } | Out-Null
+    if ($checkout.Code -ne 0) { throw "git checkout of $RepoRef failed: $($checkout.Text)" }
+    # Only the checked-out commit stays: no other branches, remote-tracking branches, tags, or reflog.
+    $refs = Invoke-LabGit @('-C', $LabRoot, 'for-each-ref', '--format=%(refname)')
+    foreach ($ref in @($refs.Text -split '\s+' | Where-Object { $_ -and $_ -ne 'refs/heads/lab' })) {
+        Invoke-LabGit @('-C', $LabRoot, 'update-ref', '--no-deref', '-d', $ref) | Out-Null
     }
-    if (-not (Test-Path -LiteralPath (Join-Path $LabResources 'README.md'))) { Set-LabPlaceholder }
+    Invoke-LabGit @('-C', $LabRoot, 'reflog', 'expire', '--expire=now', '--all') | Out-Null
+    Invoke-LabGit @('-C', $LabRoot, 'gc', '--quiet', '--prune=now') | Out-Null
+    # The prepare LCA runs git here as SYSTEM, and the attendee as themselves: both must trust the folder.
+    $safePath = $LabRoot -replace '\\', '/'
+    $trusted = @(Invoke-Native { & $GitExe config --system --get-all safe.directory 2>$null })
+    if ($trusted -notcontains $safePath) { Invoke-Native { & $GitExe config --system --add safe.directory $safePath } | Out-Null }
+    # No deployment state in the image
+    Remove-Item -LiteralPath (Join-Path $LabRoot '.lab') -Recurse -Force -ErrorAction SilentlyContinue
+    $Versions['labRepository'] = "$RepoRef at $((Invoke-LabGit @('-C', $LabRoot, 'rev-parse', '--short', 'HEAD')).Text)"
 
     # VS Code opens the lab folder at sign-in, and from the Start menu, because the image's VS Code doesn't restore
     # windows. Edge opens the Azure portal.
@@ -1123,8 +1148,8 @@ function Set-LabFolderAndStartup {
     foreach ($path in $links) {
         $link = $shell.CreateShortcut($path)
         $link.TargetPath = $CodeExe
-        $link.Arguments = '"' + $LabResources + '"'
-        $link.WorkingDirectory = $LabResources
+        $link.Arguments = '"' + $LabRoot + '"'
+        $link.WorkingDirectory = $LabRoot
         $link.Save()
     }
     $edgeExe = Get-EdgePath
@@ -1134,8 +1159,12 @@ function Set-LabFolderAndStartup {
         $edgeLink.Arguments = $PortalUrl
         $edgeLink.Save()
     }
-    Write-Ready ("Lab folder $LabResources, which the prepare LCA fills at each launch, with shortcuts that open VS Code on it " +
-                 "and Edge on the Azure portal at sign-in. No lab repository or solutions in the image.$removed")
+    $solutions = @(Find-SolutionContent)
+    if ($solutions.Count -gt 0) {
+        throw "$LabRoot has solution content ($($solutions -join '; ')). Clone the lab repository, not the instructors' repository."
+    }
+    Write-Ready ("Lab repository in $LabRoot ($($Versions['labRepository']), no history, no solutions), with shortcuts that open " +
+                 'VS Code on it and Edge on the Azure portal at sign-in')
 }
 
 function Test-Image([switch]$Finalizing) {
@@ -1224,12 +1253,12 @@ function Test-Image([switch]$Finalizing) {
     $startup = [Environment]::GetFolderPath('Startup')
     $codeLink = Join-Path $startup "$LabName - Visual Studio Code.lnk"
     $opens = if (Test-Path -LiteralPath $codeLink) { (New-Object -ComObject WScript.Shell).CreateShortcut($codeLink).Arguments } else { '' }
-    $folderOk = (Test-Path (Join-Path $LabResources 'README.md')) -and $opens -eq ('"' + $LabResources + '"')
-    Add-Check 'Lab folder and startup' $folderOk "$LabResources, and the startup shortcuts. VS Code opens: $opens."
-    $leftovers = @(Find-RepositoryContent)
-    Add-Check 'No lab repository or solutions' ($leftovers.Count -eq 0) $(if ($leftovers.Count) {
-        "Found $($leftovers.Count): $(($leftovers | Select-Object -First 5) -join '; '). Delete them, and run the script again." } `
-        else { "No clone of the lab repository, SOLUTION.md, or end state in $LabResources or C:\LabFiles." })
+    $folderOk = (Test-Path (Join-Path $LabRoot 'begin-challenge\challenges')) -and $opens -eq ('"' + $LabRoot + '"')
+    Add-Check 'Lab folder and startup' $folderOk "$LabRoot (the lab repository), and the startup shortcuts. VS Code opens: $opens."
+    $leftovers = @(Find-SolutionContent)
+    Add-Check 'No solutions in the lab folder' ($leftovers.Count -eq 0) $(if ($leftovers.Count) {
+        "Found $($leftovers.Count): $(($leftovers | Select-Object -First 5) -join '; '). Run the script again: item 12 keeps only one commit." } `
+        else { "No SOLUTION.md, FEASIBILITY.md, or end state in $LabRoot or its git history." })
 
     $winlogon = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
     $autoSignIn = $winlogon.AutoAdminLogon -eq '1'
@@ -1267,7 +1296,7 @@ function Save-ImageManifest {
         builtAt  = (Get-Date).ToString('o')
         builtBy  = $CurrentUser
         os       = "$($os.Caption) $($os.Version)"
-        labResources = $LabResources
+        labRoot  = $LabRoot
         versions = $Versions
     }
     ConvertTo-Json -InputObject $manifest -Depth 5 | Set-Content -LiteralPath (Join-Path $StateDir 'image-manifest.json') -Encoding UTF8
@@ -1300,14 +1329,12 @@ function Invoke-Finalize {
                  Where-Object { $_ -match '(?i)vscode|github|^git:|gh:' })
     foreach ($target in $targets) { Invoke-Native { cmdkey.exe "/delete:$target" } | Out-Null }
     # Lab state from a test run of the LCAs in this VM: their settings, state, logs, and scheduled task, and the
-    # attendee folder's files. The folder goes back to its placeholder.
+    # deployment state in the lab folder.
     Unregister-ScheduledTask -TaskName 'KubeCon CTF LCA worker' -Confirm:$false -ErrorAction SilentlyContinue
-    Get-ChildItem -LiteralPath $LabResources -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-    Set-LabPlaceholder
     foreach ($path in (Join-Path $env:USERPROFILE '.kube'),
                       (Join-Path $env:APPDATA 'GitHub CLI\hosts.yml'),
                       $LcaStateDir,
-                      $OldRepoClone,
+                      (Join-Path $LabRoot '.lab'),
                       (Join-Path $env:LOCALAPPDATA 'Microsoft\Edge\User Data'),
                       (Join-Path $env:APPDATA 'Code\User\workspaceStorage'),
                       (Join-Path $env:APPDATA 'Code\User\History'),
@@ -1329,13 +1356,11 @@ function Invoke-Finalize {
         Invoke-Native { & $AzCmd account show --only-show-errors 2>$null } | Out-Null
         if ($LASTEXITCODE -eq 0) { $left.Add('an Azure CLI sign-in') }
     }
-    foreach ($path in (Join-Path $env:USERPROFILE '.kube'), (Join-Path $env:APPDATA 'GitHub CLI\hosts.yml'), $LcaStateDir, $OldRepoClone) {
+    foreach ($path in (Join-Path $env:USERPROFILE '.kube'), (Join-Path $env:APPDATA 'GitHub CLI\hosts.yml'), $LcaStateDir, (Join-Path $LabRoot '.lab')) {
         if (Test-Path -LiteralPath $path) { $left.Add($path) }
     }
-    $labFiles = @(Get-ChildItem -LiteralPath $LabResources -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne 'README.md' })
-    if ($labFiles.Count -gt 0) { $left.Add("$($labFiles.Count) items in $LabResources besides its placeholder README.md") }
-    $solutions = @(Find-RepositoryContent)
-    if ($solutions.Count -gt 0) { $left.Add("the lab repository or its solutions ($(($solutions | Select-Object -First 3) -join '; '))") }
+    $solutions = @(Find-SolutionContent)
+    if ($solutions.Count -gt 0) { $left.Add("solution content in the lab folder ($(($solutions | Select-Object -First 3) -join '; '))") }
     $credentials = @(Invoke-Native { cmdkey.exe /list } | Where-Object { "$_" -match '(?i)Target:.*(vscode|github|git:|gh:)' })
     if ($credentials.Count -gt 0) { $left.Add("$($credentials.Count) GitHub or VS Code credentials in the Credential Manager") }
     if ((Get-WslDistributions) -contains $WslDistribution) {
@@ -1391,7 +1416,7 @@ try {
             'Visual Studio Code, Copilot, and AKS-MCP'   = { Install-VSCode }
             'Microsoft Edge'                             = { Set-EdgePolicies }
             'WSL'                                        = { Install-Wsl }
-            'Lab folder and startup shortcuts'           = { Set-LabFolderAndStartup }
+            'Lab repository and startup shortcuts'       = { Set-LabFolderAndStartup }
         }
         $failed = New-Object System.Collections.Generic.List[string]
         $number = 0

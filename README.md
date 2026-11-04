@@ -1,31 +1,10 @@
-# KubeCon 2026 · AKS capture-the-flag lab (pre-day) – evaluation code
+# AKS capture-the-flag lab · KubeCon North America 2026
 
-Working code to deploy and evaluate the **AKS Automatic troubleshooting challenges** proposed for the KubeCon North
-America 2026 Azure Day pre-day lab (*"Capture the Flag AKS Lab"*). Every challenge can be deployed to Microsoft Azure
-in its **begin state** (seeded fault) or its **end state** (solved) with three interchangeable approaches:
-**Terraform**, the **Azure CLI in bash**, and the **Azure CLI in PowerShell**.
-
-> This repository is for **evaluating the challenges** (feasibility, timing, participant experience) before the
-> final selection. It contains the solutions. The [Skillable deployment](skillable/README.md) (lab VM image and
-> life cycle actions) builds the participant environment from it.
-
-## Repository layout
-
-```text
-begin-challenge/          deploy the challenges WITH their faults + participant instructions and walkthroughs
-  azure-cli-bash/         deploy.sh, cleanup.sh
-  azure-cli-powershell/   deploy.ps1, cleanup.ps1
-  terraform/              Terraform root module
-  challenges/<id>-*/      README.md (briefing, success criteria, hints, feasibility), SOLUTION.md, manifests/
-challenge-end-state/      deploy the challenges SOLVED (same structure; README per challenge = what changed)
-scoring/                  verify.sh / verify.ps1 - checks each challenge against its success criteria
-leaderboard/              optional live leaderboard for the lab room (verify results -> projector)
-skillable/                Skillable lab VM image script + life cycle actions (prepare, readiness gate), runbooks
-shared/                   code shared by both states (bash library, PowerShell module, Terraform modules)
-tests/                    local smoke tests on kind (no Azure needed)
-docs/                     prerequisites, architecture, testing
-FEASIBILITY.md            feasibility summary and recommended line-up
-```
+Hands-on troubleshooting challenges for **Azure Kubernetes Service (AKS) Automatic**, from the KubeCon North America
+2026 Azure Day pre-day lab (*Capture the Flag AKS Lab*). Each challenge is a realistic fault, deployed into its own
+namespace of an AKS Automatic cluster: find it, fix it, and check your work with one command. Try them in your own
+Azure subscription with any of three deployment approaches: **Terraform**, the **Azure CLI in bash**, or the
+**Azure CLI in PowerShell**.
 
 ## The challenges
 
@@ -42,37 +21,52 @@ FEASIBILITY.md            feasibility summary and recommended line-up
 | A5 | [Running is not ready](begin-challenge/challenges/a5-running-is-not-ready/README.md) | Readiness probes, rollouts | `a5-releases` |
 | A6 | [The data survived, the application didn't](begin-challenge/challenges/a6-data-survived-app-didnt/README.md) | PVCs, Azure Disk | `a6-records` |
 
-**Feasibility and recommended line-up:** [FEASIBILITY.md](FEASIBILITY.md)
+Each challenge's README has a briefing, the success criteria, and hints that you can expand when you need them.
 
-## Quick start
+## Try it in your own subscription
 
 Prerequisites ([details](docs/prerequisites.md)): an Azure subscription where you are **Owner** (or Contributor +
 User Access Administrator), Azure CLI ≥ 2.86, `kubectl` + `kubelogin` (`az aks install-cli`), and either bash,
 PowerShell 7.4+ or Terraform ≥ 1.9. Sign in with `az login`.
 
 ```bash
-# 1. Deploy the begin state (pick one approach)
+# 1. Deploy the challenges, each with its fault in place (pick one approach; 15-25 minutes)
 ./begin-challenge/azure-cli-bash/deploy.sh                    # bash
 ./begin-challenge/azure-cli-powershell/deploy.ps1             # PowerShell
 (cd begin-challenge/terraform && terraform init && terraform apply -var="subscription_id=$(az account show --query id -o tsv)")
 
-# 2. Work through a challenge
-#    begin-challenge/challenges/<id>-*/README.md  (briefing, hints)  ->  SOLUTION.md (walkthrough)
+# 2. Work through a challenge: begin-challenge/challenges/<id>-*/README.md
 
-# 3. Score it
-scoring/verify.sh --challenges c1           # or: ./scoring/verify.ps1 -Challenges c1
+# 3. Check your work
+scoring/verify.sh --challenges c1                    # or: ./scoring/verify.ps1 -Challenges c1
 
-# 4. Clean up
-./begin-challenge/azure-cli-bash/cleanup.sh
+# 4. Start a challenge over
+./begin-challenge/azure-cli-bash/deploy.sh -c c1     # or: ./begin-challenge/azure-cli-powershell/deploy.ps1 -Challenges c1
+
+# 5. Clean up: deletes the resource group and everything in it
+./begin-challenge/azure-cli-bash/cleanup.sh          # or: ./begin-challenge/azure-cli-powershell/cleanup.ps1
 ```
 
-To see the solved configuration, deploy [`challenge-end-state`](challenge-end-state) the same way (its own resource
-group by default) – every challenge should then pass `scoring/verify`.
+Options, resets with Terraform, and troubleshooting tips for AKS Automatic: [begin-challenge/README.md](begin-challenge/README.md).
+What each check looks at: [scoring/README.md](scoring/README.md).
 
 **Sharing a subscription with others?** The default resource group names are the same for everyone, so pass your
 own (`-g` in bash, `-ResourceGroup` in PowerShell, `resource_group_name` in Terraform), for example
-`rg-<alias>-ctf-begin` and `rg-<alias>-ctf-end`. The globally unique names (Key Vault, Foundry account, storefront
-DNS label) are derived from the subscription and resource group, so they follow automatically.
+`rg-<alias>-ctf`. The globally unique names (Key Vault, Foundry account, storefront DNS label) are derived from the
+subscription and resource group, so they follow automatically.
+
+## Try it without Azure
+
+The challenges that need no Azure services (C1, A1, A2, A3, A5, A6) also run on a local **kind** cluster, with the
+same bash library, PowerShell module, and Terraform module that the Azure deployment uses:
+
+```bash
+kind create cluster --name ctf
+tests/kind/apply-local.sh begin                         # or: ./tests/kind/apply-local.ps1
+scoring/verify.sh --context kind-ctf --challenges c1    # or: ./scoring/verify.ps1 -Context kind-ctf -Challenges c1
+```
+
+A1 behaves differently on AKS Automatic, so try it on Azure too.
 
 ## How the environment is built
 
@@ -83,42 +77,23 @@ Azure services are created only for the challenges that need them: a Microsoft F
 and a workload identity for **C4**, a Key Vault + workload identity for **A4**; the Azure Monitor workspace that
 backs the **A2** dashboards stays in the lab resource group. See [docs/architecture.md](docs/architecture.md).
 
-## Testing without Azure
+## Repository layout
 
-The Kubernetes-only challenges (C1, A1, A2, A3, A5, A6) can be exercised on a local **kind** cluster with the same
-bash library, PowerShell module and Terraform module the Azure deployment uses – see [docs/testing.md](docs/testing.md).
+```text
+begin-challenge/          deploy the challenges with their faults, and each challenge's instructions
+  azure-cli-bash/         deploy.sh, cleanup.sh
+  azure-cli-powershell/   deploy.ps1, cleanup.ps1
+  terraform/              Terraform root module
+  challenges/<id>-*/      README.md (briefing, success criteria, hints) and manifests/
+scoring/                  verify.sh / verify.ps1 - check a challenge against its success criteria
+shared/                   code the three approaches share (bash library, PowerShell module, Terraform modules)
+skillable/                the hosted lab: lab VM image setup, life cycle actions, and the lab instructions
+tests/                    run the Kubernetes-only challenges on a local kind cluster
+docs/                     prerequisites and architecture
+```
 
-## Skillable deployment
+## The hosted lab
 
-[skillable/](skillable/README.md) has everything to run the lab on Skillable, modeled on the LAB723 (Ignite 2026)
-artifacts: a **VM image setup script** with a paste-in bootstrap (Azure CLI with aks-agent, kubectl, kubelogin,
-Helm, GitHub CLI, AKS desktop, Inspektor Gadget, VS Code with Copilot and AKS-MCP, PowerShell 7, and WSL), and
-**life cycle actions**: a 250-line prepare LCA that clones this repository at the event's tag, builds the attendee
-folder `C:\lab-resources` without the solutions, deletes the clone, deploys the begin state with the attendee
-folder's `deploy.ps1` as the cloud subscription's service principal, gives the attendee **Azure Kubernetes Service
-RBAC Cluster Admin**, and runs a readiness gate, and a readiness gate LCA that removes the service principal from
-the VM before the attendee gets it. The attendee content, [skillable lab steps.md](skillable/skillable%20lab%20steps.md)
-(the Skillable instructions) and the attendee folder, is generated from the challenge READMEs by
-[skillable/build-attendee-content.ps1](skillable/build-attendee-content.ps1), so this repository stays the single
-source of truth and attendees never get `SOLUTION.md`, the feasibility notes, or the end state. Runbooks:
-[VM image](skillable/vm-image/VM-IMAGE-RUNBOOK.md), [LCAs](skillable/lca/LCA-RUNBOOK.md).
-
-## Event leaderboard (optional)
-
-Lab VMs registered for an event (by a Skillable life cycle action) record every `scoring/verify` result on a central
-leaderboard, which the instructor projects in the room: who has captured which flag, first captures, and progress on
-challenges still in work. It is Azure Blob Storage with anonymous access and account keys disabled; lab VMs get a
-create-only token, the instructor reads with their own Entra sign-in. Setup, security model and event-day steps:
-[leaderboard/README.md](leaderboard/README.md).
-
-## Status
-
-Code complete, validated locally (kind) and **piloted on Azure** on 2026-10-14 (AKS Automatic 1.35, westus3): the
-begin state was deployed with the PowerShell and bash scripts and the end state with Terraform. In the final run every
-challenge failed as designed in the begin state and passed in the end state. Pilot results and the changes they
-led to are in [FEASIBILITY.md](FEASIBILITY.md#pilot-gates--results-of-the-first-azure-deployment-2026-10-14-westus3-aks-automatic-1358).
-
-**2026-11-03:** after the team review, C2 became an Ingress-NGINX → Gateway API migration (application routing
-add-on, `ingress2gateway`, AI-assisted) and A2 uses the Managed Prometheus dashboards; both were re-validated on
-Azure (AKS Automatic 1.36) with all three approaches – see
-[FEASIBILITY.md](FEASIBILITY.md#changes-after-the-team-review-2026-11-03).
+The hosted version of this lab runs on Skillable: each attendee gets a lab VM with the tools installed and this
+repository in `C:\LabFiles\kubecon26-pre-day-lab`, and an AKS Automatic cluster with every challenge deployed.
+[skillable/](skillable/README.md) has the scripts that build it, and the lab instructions.

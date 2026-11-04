@@ -4,8 +4,8 @@
 
 .DESCRIPTION
     Checks each challenge against the success criteria from the lab design.
-    Against a BEGIN-state deployment the checks fail (the fault is present); after the
-    expected repair - or against an END-state deployment - they pass.
+    Against a freshly deployed challenge the checks fail (its fault is present); after
+    the expected repair they pass.
     Needs only kubectl (with access to the cluster). Exit code 0 when every selected
     challenge passes.
 
@@ -17,8 +17,8 @@
     ./scoring/verify.ps1 -Quick                            # shorter observation windows
 
 .NOTES
-    On a machine registered for an event leaderboard, each result is also recorded there
-    (see leaderboard/README.md); -NoReport skips that, -Quick runs are never recorded.
+    On a machine registered for an event leaderboard, each result is also recorded there;
+    -NoReport skips that, -Quick runs are never recorded.
 #>
 #Requires -Version 7.4
 [CmdletBinding()]

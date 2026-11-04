@@ -2,11 +2,10 @@
 
 | | |
 |---|---|
-| **Round** | Proposed core, round 1 · Foundational |
+| **Level** | Foundational |
 | **Namespace** | `c1-store` |
-| **Investigation time (design target)** | 15–20 minutes |
+| **Suggested time** | 15–20 minutes |
 | **Azure services** | AKS Automatic only |
-| **Walkthrough to the end state** | [SOLUTION.md](SOLUTION.md) (facilitators only) |
 
 ## Participant briefing
 
@@ -85,16 +84,3 @@ that would have caught it.
 begin-challenge/azure-cli-bash/deploy.sh -c c1        # re-creates the challenge with its fault (default --reset)
 ./begin-challenge/azure-cli-powershell/deploy.ps1 -Challenges c1
 ```
-
----
-
-## Feasibility assessment (evaluation notes)
-
-| Aspect | Assessment |
-|---|---|
-| **Technical feasibility** | **High.** The fault is deterministic: `FASTIFY_ADDRESS: "0.0.0.0:3000"` (a host:port typed into a host-only setting) makes `order-service` exit with `getaddrinfo ENOTFOUND 0.0.0.0:3000` within seconds of connecting to RabbitMQ → `CrashLoopBackOff`. Verified with the real 2.2.0 image in Docker and on a local Kubernetes 1.37 cluster. No Azure dependency beyond the cluster; AKS Automatic deployment safeguards do not interfere (probes and resources are set explicitly). |
-| **Validation status** | Fault + fix + scoring validated locally (kind) with all three deployment approaches and **on AKS Automatic 1.35 (westus3, 2026-10-14)**: begin state `CrashLoopBackOff` with the same `ENOTFOUND` error, synthetic order through the storefront fails; end state passes 6/6. A challenge reset re-creates Services, so the storefront's nginx gets a `warm-dns-cache` init container (LocalDNS can return a Service's old IP right after a reset). |
-| **Fit for 200-level users** | Good. The path uses core skills (`get pods`, `describe`, `logs --previous`, ConfigMap, `rollout restart`). Two small traps keep it interesting: the log ends with unrelated `npm notice` lines, and a ConfigMap change needs a restart to take effect. |
-| **Expected time** | 10–15 min typical, up to 20 min for slower participants → fits the 15–20 min window. |
-| **Risks** | Low. Participants may "fix" with `kubectl set env` (scoring flags it as a temporary override). Removing the setting from the ConfigMap also works (fastify-cli then listens on all interfaces – verified on containerd) and is accepted. Docker Hub pull for RabbitMQ 4.x (not on the MCR mirror) – negligible per cluster. |
-| **Opinion** | **Keep as round 1.** Ideal warm-up: realistic, quick to explain, and it exercises the troubleshooting loop every later round relies on. |

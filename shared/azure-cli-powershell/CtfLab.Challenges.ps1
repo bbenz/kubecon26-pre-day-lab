@@ -103,9 +103,8 @@ function Install-CtfChallenge([string]$Id) {
 }
 
 # Deletes objects listed in <challenge>/prune.txt (one <resource>/<name> per line,
-# # comments allowed): objects of the begin state that the end state no longer
-# has, for example C2's legacy Ingress. Lets the end state be applied on top of
-# a begin-state deployment ("solve in place").
+# # comments allowed): objects that an earlier state of the challenge had and
+# this state doesn't, so that one state can be applied on top of another.
 function Remove-CtfPrunedObjects([string]$Id, [string]$Namespace) {
     $list = Join-Path (Get-CtfChallengeDir $Id) 'prune.txt'
     if (-not (Test-Path $list)) { return }

@@ -2,11 +2,10 @@
 
 | | |
 |---|---|
-| **Round** | Preferred alternate · Intermediate |
+| **Level** | Intermediate |
 | **Namespace** | `a2-checkout` |
-| **Investigation time (design target)** | 20–25 minutes |
+| **Suggested time** | 20–25 minutes |
 | **Azure services** | AKS Automatic with **Azure Monitor managed service for Prometheus** – viewed through **Dashboards with Grafana** in the Azure portal (no Grafana instance to run); metrics-server for `kubectl top` |
-| **Walkthrough to the end state** | [SOLUTION.md](SOLUTION.md) (facilitators only) |
 
 ## Participant briefing
 
@@ -110,16 +109,3 @@ begin-challenge/azure-cli-bash/deploy.sh -c a2
 * **Access denied on the dashboard** – viewing Managed Prometheus data needs read access to the cluster's Azure
   Monitor workspace data (subscription/resource group Owner worked in testing; otherwise ask for
   **Monitoring Data Reader** on the workspace). `kubectl top` and `/stats` (Hint 2) work without it.
-
----
-
-## Feasibility assessment (evaluation notes)
-
-| Aspect | Assessment |
-|---|---|
-| **Technical feasibility** | **High.** Self-contained fixture (Python on an MCR image, no image build). The 100m CPU limit sits exactly at AKS Automatic's deployment-safeguards floor, so it is **not** auto-raised. Calibrated locally: 100m → p95 ≈ 1.2–1.6 s, 99% of CFS periods throttled (FAIL); 1 CPU → p95 ≈ 107 ms (PASS). Valid fixes: 1 replica at ~1 CPU, or 2 replicas with up to 1 CPU each (2 × 500m is borderline – p95 ≈ 297 ms locally because the Service doesn't spread 4 concurrent requests evenly). A LimitRange enforces the per-container ceiling, so "unlimited" fixes are rejected by the API server. Managed Prometheus is on by default for AKS Automatic clusters created with the Azure CLI or portal; the Terraform deployment adds the same data collection rule and recording rules, and every deployment keeps the Azure Monitor workspace in the lab resource group. The background traffic (~1 checkout/s) keeps the throttling visible on the dashboards between load tests. |
-| **Validation status** | Fault, fix and scoring validated locally with bash, PowerShell and Terraform, on AKS Automatic 1.35 (westus3, 2026-10-14), and again **with the background traffic and Managed Prometheus on AKS Automatic 1.36 (westus3, 2026-11-03)**: begin – background checkouts p95 ≈ 175 ms, `kubectl top` ≈ 27m (a quarter of the limit) while ≈ 50–60% of CPU periods are throttled; load test p95 ≈ 2.6 s (48 s run, FAIL; background p95 ≈ 2.6 s meanwhile). End – load test p95 ≈ 186 ms (PASS, 3.8 s run), background p50 ≈ 36 ms. The throttling ratio, CPU usage and the recording rules behind the dashboard panels were confirmed in the Azure Monitor workspace with PromQL. |
-| **Fit for 200-level users** | Good. The load test gives an immediate, objective signal; the portal dashboards turn "kubectl top looks fine" into a visible throttling problem – and show off an AKS Automatic default (Managed Prometheus + Dashboards with Grafana) instead of only kubectl. |
-| **Expected time** | 20–25 min (test runs: ~40–60 s broken, ~3 s fixed; dashboards lag 1–3 min; a request increase may trigger a 1–3 min NAP node). |
-| **Risks** | Metric ingestion delay (1–3 min) – the hints say so and `/stats` is an instant fallback. Viewing the dashboards needs read access to the Azure Monitor workspace data (a Skillable role question). Performance variance across VM sizes (large margin around the objective). |
-| **Opinion** | **Strong alternate – recommended as the first substitute for C3** for a 200-level audience: deterministic, measurable, quick to reset, very relevant to day-2 operations, and now a showcase for AKS Automatic's built-in monitoring. |
