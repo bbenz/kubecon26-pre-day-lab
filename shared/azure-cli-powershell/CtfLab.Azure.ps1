@@ -94,7 +94,11 @@ function Get-CtfSignedInPrincipal {
 }
 
 function Set-CtfRoleAssignment([string]$PrincipalId, [string]$PrincipalType, [string]$Role, [string]$Scope) {
-    $count = Invoke-AzTsv role assignment list --assignee $PrincipalId --role $Role --scope $Scope --query 'length(@)'
+    # Listed by scope and role, not --assignee, which needs Microsoft Graph: a lab service principal, or an attendee
+    # resetting a challenge, may not be allowed to read it. Inherited assignments count. The query has spaces, so
+    # az.cmd gets it quoted: cmd.exe misreads the parentheses of an unquoted one.
+    $count = Invoke-AzTsv role assignment list --scope $Scope --role $Role --include-inherited --fill-principal-name false `
+        --query "length([?principalId == '$PrincipalId'])"
     if ($count -and $count -ne '0') { Write-CtfOk "'$Role' already assigned"; return }
     # New managed identities can take a few seconds to replicate - retry.
     $ok = Invoke-CtfRetry -Attempts 10 -DelaySeconds 15 -Action {

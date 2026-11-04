@@ -102,7 +102,10 @@ ctf_signed_in_principal() {
 # ctf_ensure_role_assignment <principal-object-id> <principal-type> <role> <scope>
 ctf_ensure_role_assignment() {
   local principal=$1 ptype=$2 role=$3 scope=$4 count
-  count=$(az_tsv role assignment list --assignee "$principal" --role "$role" --scope "$scope" --query "length(@)" 2>/dev/null || echo 0)
+  # Listed by scope and role, not --assignee, which needs Microsoft Graph: a lab service principal, or an
+  # attendee resetting a challenge, may not be allowed to read it. Inherited assignments count.
+  count=$(az_tsv role assignment list --scope "$scope" --role "$role" --include-inherited --fill-principal-name false \
+    --query "length([?principalId == '$principal'])" 2>/dev/null || echo 0)
   if [ "${count:-0}" != "0" ]; then
     log_ok "'$role' already assigned"
     return 0
