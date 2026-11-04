@@ -154,3 +154,20 @@ identity's object ID from its token, because the service principal couldn't read
 Not tested outside Skillable: the pool's secure-token handoff, Skillable's own script runner, the lab client's
 console (VS Code and Edge opening at sign-in), the attendee's `az login` with a Temporary Access Pass, and the
 manual begin-state bootstrap (it needs an interactive browser sign-in).
+
+### Attendee folder and solution hiding (2026-11-03, later)
+
+The same setup, rebuilt from scratch with the current scripts. The prepare LCA cloned a git bundle of the commit
+(the commits weren't pushed yet), as `RepoUrl` and `RepoRef`. An attendee stand-in, a service principal with
+only the attendee's roles (Contributor, and the three roles the worker gives the portal user, without Microsoft
+Graph), ran the attendee scripts as the lab user, not elevated.
+
+| Step | Result |
+| --- | --- |
+| Image setup script, on a VM with a clone that the earlier image script made in `C:\LabFiles` | Removed the clone; **Lab folder and startup** and **No lab repository or solutions** passed; ALL ITEMS READY after the WSL restart (12 and 3 minutes) |
+| `-Finalize -NoShutdown -Force` | `C:\lab-resources` holds only its placeholder `README.md`; `C:\LabSetup` and the emptied `C:\LabFiles` are gone |
+| Prepare LCA, as SYSTEM | **Attendee files** took 1 to 2 seconds: `C:\lab-resources` (113 files with the rendered manifests) built, the clone deleted. The first runs found three deployment bugs, now fixed: a race in C4's model deployment (RequestConflict right after the Foundry account was created), an Azure RBAC webhook timeout on one `kubectl apply` (now retried), and the attendee's reset trying to create role assignments (below). Then: 5.5 minutes with the cluster in place, and 8.7 minutes for a full redeploy over an existing begin state. Every readiness check passed, including **Attendee files** and **No solutions on the VM**. |
+| Readiness gate LCA, as SYSTEM | Passed in 13 to 15 seconds, from the worker's copy in `C:\ProgramData\kubecon-ctf-lca`, with the module from `C:\lab-resources`; credentials removed, no event with the application ID |
+| A search of the whole `C:` drive after the gate | No `SOLUTION.md`, `challenge-end-state`, or `FEASIBILITY.md`, and no clone |
+| `check.ps1 c1`, `reset.ps1 c1`, `reset.ps1 a4`, `check.ps1 c1,a4`, as the attendee stand-in | **NOT PASSED** before; both resets done (A4's retried two Azure RBAC webhook timeouts); **NOT PASSED** after. The first try failed: the deployment scripts checked role assignments with `--assignee`, which needs Microsoft Graph (and, on Windows, an unquoted query broke in `az.cmd`), so they tried to create assignments the attendee can't create. Fixed in bash and PowerShell. |
+| `-Finalize` after a launch | Removed the LCA's state and scheduled task, the kubeconfig, and the attendee folder's files (back to the placeholder) |
