@@ -106,7 +106,7 @@ ctf_signed_in_principal() {
 
 # ctf_ensure_role_assignment <principal-object-id> <principal-type> <role> <scope>
 ctf_ensure_role_assignment() {
-  local principal=$1 ptype=$2 role=$3 scope=$4 count
+  local principal=$1 ptype=$2 role=$3 scope=$4 count err code limit attempt=1
   # Listed by scope and role, not --assignee, which needs Microsoft Graph: a lab service principal, or an
   # attendee resetting a challenge, may not be allowed to read it. Inherited assignments count.
   count=$(az_tsv role assignment list --scope "$scope" --role "$role" --include-inherited --fill-principal-name false \
@@ -115,11 +115,51 @@ ctf_ensure_role_assignment() {
     log_ok "'$role' already assigned"
     return 0
   fi
-  # New managed identities can take a few seconds to replicate - retry.
-  retry 10 15 az role assignment create --assignee-object-id "$principal" --assignee-principal-type "$ptype" \
-    --role "$role" --scope "$scope" --only-show-errors -o none \
-    || die "Could not assign '$role' on $scope"
-  log_ok "assigned '$role'"
+  # New managed identities can take a few seconds to replicate, and requests can fail on the way: those are
+  # retried. A policy denial doesn't go away, and a missing permission rarely does: those stop sooner, with
+  # Azure's reason.
+  while :; do
+    if err=$(az role assignment create --assignee-object-id "$principal" --assignee-principal-type "$ptype" \
+        --role "$role" --scope "$scope" --only-show-errors -o none 2>&1); then
+      log_ok "assigned '$role'"
+      return 0
+    fi
+    err=$(printf '%s\n' "$err" | tr -d '\r')
+    case $err in *RoleAssignmentExists*) log_ok "assigned '$role'"; return 0 ;; esac
+    code=$(printf '%s\n' "$err" | sed -n -e '/^ERROR: (/{s/^ERROR: (\([A-Za-z]*\)).*/\1/p;q;}' -e '/^Code: /{s/^Code: \([A-Za-z]*\).*/\1/p;q;}')
+    case ${code:=error} in
+      RequestDisallowedByPolicy) limit=1 ;;
+      AuthorizationFailed|LinkedAuthorizationFailed) limit=3 ;;
+      *) limit=10 ;;
+    esac
+    [ "$attempt" -lt "$limit" ] || die "$(ctf_role_assignment_failure "$role" "$scope" "$code" "$err")"
+    log_warn "Assigning '$role' failed with $code (attempt $attempt of $limit) - retrying in 15 seconds ..."
+    attempt=$((attempt + 1))
+    sleep 15
+  done
+}
+
+# ctf_role_assignment_failure <role> <scope> <code> <az error output>: why a role assignment failed, and what
+# to do about it.
+ctf_role_assignment_failure() {
+  local role=$1 scope=$2 code=$3 text=$4 role_id policy hint
+  role_id=$(az_tsv role definition list --name "$role" --query '[0].name' 2>/dev/null) || role_id=""
+  case $code in
+    RequestDisallowedByPolicy)
+      policy=$(printf '%s\n' "$text" | sed -n '/"policyAssignmentDisplayName"/{s/.*"policyAssignmentDisplayName": *"\([^"]*\)".*/\1/p;q;}')
+      [ -n "$policy" ] || policy=$(printf '%s\n' "$text" | sed -n '/"policyAssignmentName"/{s/.*"policyAssignmentName": *"\([^"]*\)".*/\1/p;q;}')
+      hint="Azure Policy denied the role assignment"
+      [ -z "$policy" ] || hint="$hint (policy assignment '$policy')"
+      hint="$hint. The subscription's policies must allow role assignments (Microsoft.Authorization/roleAssignments)"
+      hint="$hint of this role: in a Skillable lab, the lab profile's access control policy (ACP)." ;;
+    AuthorizationFailed|LinkedAuthorizationFailed)
+      hint="The signed-in identity may not create role assignments there: it needs Owner, User Access Administrator,"
+      hint="$hint or Role Based Access Control Administrator on that scope, without a condition that excludes this role." ;;
+    *)
+      hint=$(printf '%s\n' "$text" | sed -n '/^ERROR:/{s/^ERROR: *//p;q;}')
+      [ -n "$hint" ] || hint=$(printf '%s\n' "$text" | sed -n '1p') ;;
+  esac
+  printf "Could not assign '%s' (role definition ID %s) on %s (%s). %s" "$role" "${role_id:-unknown}" "$scope" "$code" "$hint"
 }
 
 ctf_ensure_cluster_admin() {

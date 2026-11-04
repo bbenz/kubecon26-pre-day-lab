@@ -102,12 +102,48 @@ function Set-CtfRoleAssignment([string]$PrincipalId, [string]$PrincipalType, [st
     $count = Invoke-AzTsv role assignment list --scope $Scope --role $Role --include-inherited --fill-principal-name false `
         --query "length([?principalId == '$PrincipalId'])"
     if ($count -and $count -ne '0') { Write-CtfOk "'$Role' already assigned"; return }
-    # New managed identities can take a few seconds to replicate - retry.
-    $ok = Invoke-CtfRetry -Attempts 10 -DelaySeconds 15 -Action {
-        Test-AzCommand role assignment create --assignee-object-id $PrincipalId --assignee-principal-type $PrincipalType --role $Role --scope $Scope
+    # New managed identities can take a few seconds to replicate, and requests can fail on the way: those are retried.
+    # A policy denial doesn't go away, and a missing permission rarely does: those stop sooner, with Azure's reason.
+    for ($attempt = 1; ; $attempt++) {
+        $err = New-TemporaryFile
+        try {
+            & az role assignment create --assignee-object-id $PrincipalId --assignee-principal-type $PrincipalType `
+                --role $Role --scope $Scope --only-show-errors -o none 2>$err.FullName | Out-Null
+            $ok = $LASTEXITCODE -eq 0
+            $text = ((Get-Content -Raw $err.FullName) -replace '\s+$', '')
+        }
+        finally { Remove-Item $err.FullName -ErrorAction SilentlyContinue }
+        if ($ok -or $text -match 'RoleAssignmentExists') { Write-CtfOk "assigned '$Role'"; return }
+        $code = if ($text -match '(?m)^(?:ERROR: \(|Code: )(\w+)') { $Matches[1] } else { 'error' }
+        $limit = switch -Regex ($code) { '^RequestDisallowedByPolicy$' { 1 } '^(Linked)?AuthorizationFailed$' { 3 } default { 10 } }
+        if ($attempt -ge $limit) { throw (Get-CtfRoleAssignmentFailure $Role $Scope $code $text) }
+        Write-CtfWarn "Assigning '$Role' failed with $code (attempt $attempt of $limit) - retrying in 15 seconds ..."
+        Start-Sleep -Seconds 15
     }
-    if (-not $ok) { throw "Could not assign '$Role' on $Scope" }
-    Write-CtfOk "assigned '$Role'"
+}
+
+# Why a role assignment failed, from az's error output, and what to do about it.
+function Get-CtfRoleAssignmentFailure([string]$Role, [string]$Scope, [string]$Code, [string]$ErrorText) {
+    $roleId = Invoke-AzTsv role definition list --name $Role --query '[0].name'
+    $failed = "Could not assign '$Role' (role definition ID $(if ($roleId) { $roleId } else { 'unknown' })) on $Scope ($Code)."
+    switch -Regex ($Code) {
+        '^RequestDisallowedByPolicy$' {
+            $policy = if ($ErrorText -match '"policyAssignmentDisplayName":\s*"([^"]+)"') { " (policy assignment '$($Matches[1])')" }
+                      elseif ($ErrorText -match '"policyAssignmentName":\s*"([^"]+)"') { " (policy assignment '$($Matches[1])')" } else { '' }
+            return "$failed Azure Policy denied the role assignment$policy. The subscription's policies must allow role " +
+                   "assignments (Microsoft.Authorization/roleAssignments) of this role: in a Skillable lab, the lab profile's " +
+                   'access control policy (ACP).'
+        }
+        '^(Linked)?AuthorizationFailed$' {
+            return "$failed The signed-in identity may not create role assignments there: it needs Owner, User Access " +
+                   'Administrator, or Role Based Access Control Administrator on that scope, without a condition that ' +
+                   'excludes this role.'
+        }
+        default {
+            $line = @($ErrorText -split "`n" | Where-Object { $_ -match '^ERROR:' }) + @(($ErrorText -split "`n")[0]) | Select-Object -First 1
+            return "$failed $(($line -replace '^ERROR:\s*', '').Trim())"
+        }
+    }
 }
 
 function Grant-CtfClusterAdmin {

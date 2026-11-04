@@ -211,11 +211,29 @@ function Get-TokenObjectId {
 }
 
 function Set-RoleAssignment([string]$PrincipalId, [string]$Type, [string]$Role, [string]$Scope) {
+    # A policy denial doesn't go away, and a missing permission rarely does: they stop at once, or after three tries, with
+    # Azure's reason. Other failures, such as a new identity that hasn't replicated yet, get six tries.
     for ($try = 1; ; $try++) {
         $r = Invoke-Az @('role', 'assignment', 'create', '--assignee-object-id', $PrincipalId, '--assignee-principal-type', $Type,
                          '--role', $Role, '--scope', $Scope, '-o', 'none') -AllowFailure
         if ($r.ExitCode -eq 0 -or $r.Err -match 'already exists|RoleAssignmentExists|Conflict') { return }
-        if ($try -ge 6) { throw "Couldn't assign '$Role' on $Scope. $(Limit-Text $r.Err 300)" }
+        $code = if ($r.Err -match '(?m)^(?:ERROR: \(|Code: )(\w+)') { $Matches[1] } else { 'error' }
+        $limit = switch -Regex ($code) { '^RequestDisallowedByPolicy$' { 1 } '^(Linked)?AuthorizationFailed$' { 3 } default { 6 } }
+        if ($try -ge $limit) {
+            $hint = switch -Regex ($code) {
+                '^RequestDisallowedByPolicy$' {
+                    $policy = if ($r.Err -match '"policyAssignmentDisplayName":\s*"([^"]+)"') { " (policy assignment '$($Matches[1])')" } else { '' }
+                    "Azure Policy denied it${policy}: the lab profile's access control policy (ACP) must allow role assignments " +
+                    '(Microsoft.Authorization/roleAssignments) of this role.'
+                }
+                '^(Linked)?AuthorizationFailed$' {
+                    'The LCA identity may not create role assignments there: it needs Owner, User Access Administrator, or ' +
+                    'Role Based Access Control Administrator on that scope.'
+                }
+                default { '' }
+            }
+            throw "Couldn't assign '$Role' on $Scope ($code). $hint $(Limit-Text $r.Err 300)"
+        }
         Start-Sleep -Seconds 15
     }
 }

@@ -97,6 +97,10 @@ an `az rest` call timing out (the scripts retry it three times), or `TLS handsha
 fixed by simply re-running the same command. If you deployed only part of the challenges with `-c` /
 `-Challenges`, re-run with the same selection (the begin-state scripts reset the selected challenges).
 
+`Could not assign '<role>' ... (RequestDisallowedByPolicy)` or `(AuthorizationFailed)` isn't transient: an Azure
+Policy in your subscription denies role assignments (the message names the policy assignment), or your account may
+not create them. See the first row of [the prerequisites](../docs/prerequisites.md#azure).
+
 ## After deployment
 
 ```bash
