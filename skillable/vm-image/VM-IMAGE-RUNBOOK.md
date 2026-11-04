@@ -11,7 +11,7 @@ image build. The [LCA runbook](../lca/LCA-RUNBOOK.md) covers what happens at eac
 | [`kubecon-ctf-vm-image-setup-bootstrap.txt`](kubecon-ctf-vm-image-setup-bootstrap.txt) | The same script, compressed for pasting. Pasted into an elevated PowerShell window in the VM, it recreates the script as `C:\LabSetup\kubecon-ctf-vm-image-setup.ps1`, checks its SHA-256 hash, and runs it. If a character is mistyped, the check fails and nothing runs. |
 | [`../make-bootstraps.ps1`](../make-bootstraps.ps1) | Regenerates the bootstrap after any change to the setup script. |
 
-Current setup script SHA-256: `44477E58F21C3411BD7DDED02589C05C1BD79B81969B9633302C32E70099C3A9`
+Current setup script SHA-256: `FF33558E7C1E17229648F00122708B765C9F0BA59720E39F80C95EB50146CB7D`
 
 ## What the image gets
 
@@ -28,9 +28,9 @@ The lab design's VM prerequisites, plus what the lab repository's scripts need:
 | 7 | GitHub CLI | The latest release, checksum-verified, with update notices off. |
 | 8 | AKS desktop | The latest release (0.10.0 today), signature-verified (Microsoft), installed for all users in `C:\Program Files\AKS desktop`. |
 | 9 | Visual Studio Code | System-wide, with **GitHub Copilot Chat** (and GitHub Copilot, where the gallery still has it), **Kubernetes**, **Azure Kubernetes Service**, **YAML**, **PowerShell**, **WSL**, and **HashiCorp Terraform** extensions. **AKS-MCP** is a user MCP server in `%APPDATA%\Code\User\mcp.json` (`--access-level readwrite`), so Copilot's agent mode can use it in any folder. No welcome page, update, telemetry, recommendation, or workspace trust prompts; PowerShell 7 terminal; larger fonts; auto save. |
-| 10 | Microsoft Edge | Policies: no first-run, sync, default-browser, password, or shopping prompts; starts on the Azure portal; a **KubeCon CTF** favorites folder with the Azure portal, the lab repository, AKS documentation, and the Gateway API site. |
+| 10 | Microsoft Edge | Policies: no first-run, sync, default-browser, password, or shopping prompts; starts on the Azure portal; a **KubeCon CTF** favorites folder with the Azure portal, AKS documentation, and the Gateway API site. |
 | 11 | WSL | The Virtual Machine Platform and Windows Subsystem for Linux features, the current WSL release (checked against GitHub's published digest), and Ubuntu 24.04 from the official WSL distribution list (checked against its SHA-256). The default Linux user, named after the Windows user, has passwordless sudo and no first-run prompts. Inside Ubuntu: the Azure CLI (Microsoft's package repository), kubectl, kubelogin, and Helm (checksum-verified), and jq, so the bash scripts run in WSL too. WSL 2 when the VM exposes virtualization, WSL 1 otherwise. Needs one restart (step 7). |
-| 12 | Lab repository and startup | The lab repository, cloned to `C:\LabFiles\kubecon26-pre-day-lab` (the prepare LCA moves it to the event's tag at each launch), trusted by Git for every user. VS Code's startup shortcut and Start menu shortcut open it, and Edge opens the Azure portal at sign-in. |
+| 12 | Lab folder and startup | `C:\lab-resources`, with a placeholder `README.md`: at each launch, the prepare LCA fills it with the challenges' instructions and the scripts that check and reset them, without the solutions. The image has no copy of the lab repository, because the repository has the solutions: the script removes a clone that an earlier version of it made in `C:\LabFiles\kubecon26-pre-day-lab`, and its verification fails if a clone, `SOLUTION.md`, or the end state is in `C:\lab-resources` or `C:\LabFiles`. VS Code's startup shortcut and Start menu shortcut open the folder, and Edge opens the Azure portal at sign-in. |
 
 The script also writes `C:\ProgramData\kubecon-ctf-image\image-manifest.json` (installed versions) and setup
 logs to the same folder.
@@ -39,6 +39,9 @@ logs to the same folder.
 
 - **Per-launch state:** the cluster, the challenges, the kubeconfig, the attendee's roles, and Azure sign-ins.
   The prepare LCA sets them up at each launch. The image's Azure CLI stays signed out.
+- **The lab repository:** it has the solutions. The prepare LCA clones it at launch, builds `C:\lab-resources`
+  from it, and deletes it. Don't clone the repository in the image VM, or test the LCAs there without
+  `-Finalize` afterward.
 - **GitHub sign-ins:** attendees sign in to GitHub Copilot in VS Code with their own account (a Copilot seat).
   Don't sign in to GitHub in VS Code, the GitHub CLI, or Git while you build the image. `-Finalize` removes
   GitHub CLI and Git credentials, but VS Code keeps its own sign-ins in its encrypted storage: if you signed in,
@@ -61,7 +64,7 @@ logs to the same folder.
    inside the window, and then select **Commands** > **Type Text** > **Type Clipboard Text** in the lab client.
    Don't click or type in the VM until typing finishes.
    - If the dialog doesn't accept the whole file, paste it one part at a time, in order, in the same window. Each
-     part starts with a `part N of 8` comment line.
+     part starts with a `part N of 9` comment line.
 6. The script starts after the last line. It prints `READY:` as each of the 12 items finishes, and then a
    verification table. The first run takes about 15 minutes (12 on a D4s_v5 in testing).
 7. The first run ends with **RESTART REQUIRED to finish: WSL**, because Windows must restart to turn on its WSL
@@ -82,14 +85,15 @@ logs to the same folder.
    lab client, and then restart the VM. Life cycle actions that run in the VM need the service. To confirm that
    it's running, open `http://localhost:2724` in Edge in the VM.
 10. Optional: restart the VM to check the startup experience. Windows signs in automatically, VS Code opens on
-    `C:\LabFiles\kubecon26-pre-day-lab`, Edge opens the Azure portal with the **KubeCon CTF** favorites folder,
-    and no pop-ups appear. Don't sign in to GitHub in VS Code.
+    `C:\lab-resources` (only its placeholder `README.md` until a launch), Edge opens the Azure portal with the
+    **KubeCon CTF** favorites folder, and no pop-ups appear. Don't sign in to GitHub in VS Code.
 11. In a new elevated PowerShell window, run the following command. It verifies the image again; removes
-    credentials, caches, history (including Linux shell history), deployment state, and setup files, including
-    `C:\LabSetup`; shuts down WSL; and shuts down the VM. Automatic sign-in and the integration service must pass
-    now, so their rows show **FAIL** instead of **WARN** if they're missing, and nothing is removed. After the
-    cleanup, it confirms that no Azure CLI sign-in, kubeconfig, GitHub CLI or Git credential, setup file, or
-    Linux shell history is left.
+    credentials, caches, history (including Linux shell history), deployment state, the state of any LCA test
+    run (`C:\ProgramData\kubecon-ctf-lca`, and `C:\lab-resources` back to its placeholder), and setup files,
+    including `C:\LabSetup`; shuts down WSL; and shuts down the VM. Automatic sign-in and the integration service
+    must pass now, so their rows show **FAIL** instead of **WARN** if they're missing, and nothing is removed.
+    After the cleanup, it confirms that no Azure CLI sign-in, kubeconfig, GitHub CLI or Git credential, LCA state,
+    lab repository or solution, setup file, or Linux shell history is left.
 
     ```powershell
     powershell -ExecutionPolicy Bypass -File C:\LabSetup\kubecon-ctf-vm-image-setup.ps1 -Finalize
@@ -114,8 +118,8 @@ script skips or reapplies finished items, upgrades tools that have newer release
 steps 8 and 9 unless their rows show **WARN**. Finish with steps 11 to 13. Each commit adds a differencing disk;
 keep the chain to three disks or fewer.
 
-The lab repository in the image doesn't need updating for each change: the prepare LCA fetches the event's tag
-at launch.
+The image has no copy of the lab repository, so a change to a challenge or a script doesn't need a new image: the
+prepare LCA clones the event's tag at launch.
 
 ## Troubleshooting
 
@@ -134,6 +138,7 @@ at launch.
 | **WSL** fails at "Installing the Linux tools" | The message ends with the last lines of the Linux output. Usually `apt-get` or a download failed: run the script again. |
 | `-Finalize` reports **FAILED: The cleanup left** *items* | Something kept a file open or signed back in. Remove what it lists, or restart the VM, and run `-Finalize` again. `-Force` doesn't skip this check. |
 | VS Code or Edge doesn't open at sign-in | Windows starts the Startup folder's shortcuts (`KubeCon CTF - Visual Studio Code`, `KubeCon CTF - Microsoft Edge`) once the desktop is shown. On a test VM in Azure with no console viewer, Windows didn't start them; in Skillable, the lab client shows the console. Check step 10 after a restart. VS Code's Start menu shortcut opens the lab folder too. |
+| **FAIL** No lab repository or solutions | Something copied the lab repository or a solution into `C:\lab-resources` or `C:\LabFiles`. Delete what the row lists, and run the script again. |
 | The commit takes a long time or fails | Make sure the VM is shut down before you commit; `-Finalize` stops Windows Update so that it can't block the shutdown. |
 
 ## After you change the setup script

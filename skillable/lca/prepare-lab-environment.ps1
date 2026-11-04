@@ -12,13 +12,14 @@
       Timeout: 60 minutes                          Retries: 2
       Error action: End lab (event), or Log (testing)
 
-    It's short on purpose: the lab repository's tested scripts do the work. The VM image has the
-    repository in LabRoot. This script moves it to RepoRef, and runs
-    skillable\lca\Invoke-CtfLabSetup.ps1 as SYSTEM in a scheduled task, so that a Skillable timeout
-    can't stop it, and a retry waits for the same run. The worker deploys the begin state with
-    begin-challenge\azure-cli-powershell\deploy.ps1, gives the cloud portal user its roles, sets up
-    the lab user's kubeconfig and Azure CLI, and runs the readiness gate. The readiness gate LCA
-    removes the service principal from the VM before the attendee gets it.
+    It's short on purpose: the lab repository's tested scripts do the work. This script clones the
+    repository at RepoRef into a folder that only SYSTEM and administrators can open, and runs its
+    skillable\lca\Invoke-CtfLabSetup.ps1 as SYSTEM in a scheduled task, so that a Skillable timeout can't
+    stop it, and a retry waits for the same run. The worker builds the attendee folder, LabResources,
+    without the solutions, and deletes the clone. It deploys the begin state with the attendee folder's
+    begin-challenge\azure-cli-powershell\deploy.ps1, gives the cloud portal user its roles, sets up the lab
+    user's kubeconfig and Azure CLI, and runs the readiness gate. The readiness gate LCA removes the
+    service principal from the VM before the attendee gets it.
 
     Manual = $true runs the same steps in this window as you, the cloud portal user, with your own
     Azure CLI sign-in, to test before a pool admin turns on the cloud credentials.
@@ -53,8 +54,8 @@ $Settings = [ordered]@{
     Challenges        = 'all'                 # Or a list, such as 'c1,c2,c3,c4'
     InspektorGadget   = $false                # $true: Inspektor Gadget AKS cluster extension (preview), optional in A1
     RepoUrl           = 'https://github.com/bbenz/kubecon26-pre-day-lab'
-    RepoRef           = 'main'                # A tag for the event, such as v1.0.0
-    LabRoot           = 'C:\LabFiles\kubecon26-pre-day-lab'
+    RepoRef           = 'main'                # A branch or tag: a tag for the event, such as v1.0.0
+    LabResources      = 'C:\lab-resources'    # The attendee folder: instructions, check.ps1, reset.ps1. No solutions.
     RemoveCredentials = 'AfterGate'           # AfterGate, AfterPrepare (no readiness gate LCA), or Never (testing)
     GateFailsPrepare  = $false                # $true for the event: a failed readiness gate fails this action
     WaitMinutes       = 50                    # Keep it 10 below the Timeout. The worker keeps running after that.
@@ -74,8 +75,8 @@ $TaskName   = 'KubeCon CTF LCA worker'
 $Pwsh       = 'C:\Program Files\PowerShell\7\pwsh.exe'
 $Git        = 'C:\Program Files\Git\cmd\git.exe'
 $AzPython   = 'C:\Program Files\Microsoft SDKs\Azure\CLI2\python.exe'
-$Root       = [string]$Settings.LabRoot
-$Worker     = Join-Path $Root 'skillable\lca\Invoke-CtfLabSetup.ps1'
+$Clone      = Join-Path $LcaDir 'repo'
+$Worker     = Join-Path $LcaDir 'Invoke-CtfLabSetup.ps1'
 $Manual     = [bool]$Settings.Manual
 
 function Test-Value($Value) { $t = [string]$Value; return ($t.Length -gt 0 -and $t -notmatch '^@\s*lab\.') }
@@ -105,26 +106,20 @@ function Get-LabUser {
     return [pscustomobject]@{ Name = [string]$owners[0]; Profile = $profilePath }
 }
 
-function Update-Repository {
-    # The VM image has the repository. Move it to RepoRef; if GitHub can't be reached, keep the image's copy.
-    # As SYSTEM: trust the lab user's folder, never prompt for credentials, and give up on a stalled download.
+function Get-Repository {
+    # A fresh clone of RepoRef. The worker builds the attendee folder from it, and deletes it: it has the solutions.
+    # As SYSTEM: never prompt for credentials, and give up on a stalled download.
     $env:GIT_TERMINAL_PROMPT = '0'
-    $safe = @('-c', 'safe.directory=*', '-c', 'credential.helper=', '-c', 'http.lowSpeedLimit=1000', '-c', 'http.lowSpeedTime=60')
-    if (-not (Test-Path -LiteralPath (Join-Path $Root '.git'))) {
-        $clone = Invoke-Native $Git ($safe + @('clone', '--quiet', $Settings.RepoUrl, $Root))
-        if ($clone.Code -ne 0) { throw "$Root has no copy of the lab repository, and git clone failed: $($clone.Text)" }
+    $options = @('-c', 'safe.directory=*', '-c', 'credential.helper=', '-c', 'http.lowSpeedLimit=1000', '-c', 'http.lowSpeedTime=60')
+    for ($try = 1; ; $try++) {
+        if (Test-Path -LiteralPath $Clone) { Remove-Item -LiteralPath $Clone -Recurse -Force }
+        $result = Invoke-Native $Git ($options + @('clone', '--quiet', '--depth', '1', '--branch', $Settings.RepoRef, $Settings.RepoUrl, $Clone))
+        if ($result.Code -eq 0) { break }
+        if ($try -ge 3) { throw "git clone of $($Settings.RepoRef) from $($Settings.RepoUrl) failed 3 times: $($result.Text)" }
+        Start-Sleep -Seconds (15 * $try)
     }
-    $base = $safe + @('-C', $Root)
-    $fetch = Invoke-Native $Git ($base + @('fetch', '--quiet', '--force', $Settings.RepoUrl, $Settings.RepoRef))
-    $note = "at $($Settings.RepoRef)"
-    if ($fetch.Code -eq 0) {
-        $checkout = Invoke-Native $Git ($base + @('checkout', '--quiet', '--force', '-B', 'lab', 'FETCH_HEAD'))
-        if ($checkout.Code -ne 0) { throw "git checkout of $($Settings.RepoRef) failed: $($checkout.Text)" }
-    } else {
-        $note = "WARNING: couldn't fetch $($Settings.RepoRef), so the image's copy is used ($($fetch.Text))"
-    }
-    $commit = (Invoke-Native $Git ($base + @('rev-parse', '--short', 'HEAD'))).Text
-    return "$commit $note"
+    Copy-Item -LiteralPath (Join-Path $Clone 'skillable\lca\Invoke-CtfLabSetup.ps1') -Destination $Worker -Force
+    return "$((Invoke-Native $Git ($options + @('-C', $Clone, 'rev-parse', '--short', 'HEAD'))).Text) at $($Settings.RepoRef)"
 }
 
 function Get-CredentialProblem {
@@ -193,34 +188,42 @@ if ($running -and $Manual) { throw 'The prepare LCA is still running in this VM.
 if ($running) {
     Write-Output "The prepare worker started at $($state.startedAt) is still running, so this run waits for it."
 } else {
-    $repo = Update-Repository
     $labUser = Get-LabUser
-    $config = [ordered]@{}
-    foreach ($key in $Settings.Keys) { $config[$key] = $Settings[$key] }
-    $config.LabUser = $labUser.Name
-    $config.LabProfile = $labUser.Profile
-    $config.RepoCommit = $repo
-    $sha = [Security.Cryptography.SHA256]::Create()
-    $plain = (($config.Keys | Where-Object { $_ -ne 'ClientSecret' } | ForEach-Object { "$_=$($config[$_])" }) -join ';')
-    $config.Signature = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($plain))).Replace('-', '')
-    if (-not $Manual -and $state -and $state.status -eq 'Succeeded' -and $state.signature -eq $config.Signature) {
-        Write-Output "KubeCon CTF lab is already prepared with these settings ($repo). Summary for troubleshooting: $($state.setupLog)"
-        return
-    }
-    [IO.File]::WriteAllText($ConfigPath, ($config | ConvertTo-Json -Depth 4), (New-Object Text.UTF8Encoding($false)))
-    Remove-Item -LiteralPath $StatePath -Force -ErrorAction SilentlyContinue
-    $workerArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Worker, '-Mode', 'Prepare', '-ConfigPath', $ConfigPath, '-LaunchedAt', $LaunchedAt)
-    if ($Manual) {
-        Write-Host "KubeCon CTF begin state, by hand: resource group $($Settings.ResourceGroup), as $($Settings.PortalUser). Repository $repo."
-        Write-Host 'It takes 20 to 30 minutes. Logs: C:\ProgramData\kubecon-ctf-lca'
-        & $Pwsh @workerArgs
-    } else {
-        $action = New-ScheduledTaskAction -Execute $Pwsh -Argument (($workerArgs | ForEach-Object { if ($_ -match '\s') { "`"$_`"" } else { $_ } }) -join ' ')
-        $principal = New-ScheduledTaskPrincipal -UserId 'NT AUTHORITY\SYSTEM' -LogonType ServiceAccount -RunLevel Highest
-        $taskSettings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Hours 3) -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-        Register-ScheduledTask -TaskName $TaskName -Action $action -Principal $principal -Settings $taskSettings -Force | Out-Null
-        Start-ScheduledTask -TaskName $TaskName
-        Write-Output "Started the prepare worker ($repo)."
+    try {
+        $repo = Get-Repository
+        $config = [ordered]@{}
+        foreach ($key in $Settings.Keys) { $config[$key] = $Settings[$key] }
+        $config.LabUser = $labUser.Name
+        $config.LabProfile = $labUser.Profile
+        $config.RepoCommit = $repo
+        $config.CloneDir = $Clone
+        $sha = [Security.Cryptography.SHA256]::Create()
+        $plain = (($config.Keys | Where-Object { $_ -ne 'ClientSecret' } | ForEach-Object { "$_=$($config[$_])" }) -join ';')
+        $config.Signature = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($plain))).Replace('-', '')
+        if (-not $Manual -and $state -and $state.status -eq 'Succeeded' -and $state.signature -eq $config.Signature) {
+            Remove-Item -LiteralPath $Clone -Recurse -Force
+            Write-Output "KubeCon CTF lab is already prepared with these settings ($repo). Summary for troubleshooting: $($state.setupLog)"
+            return
+        }
+        [IO.File]::WriteAllText($ConfigPath, ($config | ConvertTo-Json -Depth 4), (New-Object Text.UTF8Encoding($false)))
+        Remove-Item -LiteralPath $StatePath -Force -ErrorAction SilentlyContinue
+        $workerArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Worker, '-Mode', 'Prepare', '-ConfigPath', $ConfigPath, '-LaunchedAt', $LaunchedAt)
+        if ($Manual) {
+            Write-Host "KubeCon CTF begin state, by hand: resource group $($Settings.ResourceGroup), as $($Settings.PortalUser). Repository $repo."
+            Write-Host 'It takes 20 to 30 minutes. Logs: C:\ProgramData\kubecon-ctf-lca'
+            & $Pwsh @workerArgs
+        } else {
+            $action = New-ScheduledTaskAction -Execute $Pwsh -Argument (($workerArgs | ForEach-Object { if ($_ -match '\s') { "`"$_`"" } else { $_ } }) -join ' ')
+            $principal = New-ScheduledTaskPrincipal -UserId 'NT AUTHORITY\SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+            $taskSettings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Hours 3) -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+            Register-ScheduledTask -TaskName $TaskName -Action $action -Principal $principal -Settings $taskSettings -Force | Out-Null
+            Start-ScheduledTask -TaskName $TaskName
+            Write-Output "Started the prepare worker ($repo)."
+        }
+    } catch {
+        # The worker deletes the clone, which has the solutions. It didn't start, so delete the clone here.
+        Remove-Item -LiteralPath $Clone -Recurse -Force -ErrorAction SilentlyContinue
+        throw
     }
 }
 

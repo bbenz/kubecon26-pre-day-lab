@@ -8,9 +8,10 @@ LCAs, but much shorter: the LCAs run the lab repository's own tested deployment 
 
 | File | Where it goes | Purpose |
 | --- | --- | --- |
-| [`prepare-lab-environment.ps1`](prepare-lab-environment.ps1) | Pasted into the **prepare** LCA (First Displayable) | 250 lines (about 170 of code). Puts the lab repository at `RepoRef`, saves the settings and the cloud subscription's service principal to a protected folder, and starts the worker as SYSTEM. Waits for it, and reports the result. Has the pool's secure tokens, commented out until a pool admin turns them on. |
-| [`readiness-gate.ps1`](readiness-gate.ps1) | Pasted into the **readiness gate** LCA (Running Preinstance Assigned To User) | 33 lines. Runs the readiness gate, and removes the service principal from the VM before the attendee gets it. No secure tokens. |
-| [`Invoke-CtfLabSetup.ps1`](Invoke-CtfLabSetup.ps1) | Stays in the repository (the image has it) | The worker that both LCAs run, in PowerShell 7. Deploys the begin state with [`begin-challenge/azure-cli-powershell/deploy.ps1`](../../begin-challenge/azure-cli-powershell/deploy.ps1), gives the portal user its roles, sets up the lab user, and runs the readiness gate. |
+| [`prepare-lab-environment.ps1`](prepare-lab-environment.ps1) | Pasted into the **prepare** LCA (First Displayable) | 253 lines (185 of code). Clones the lab repository at `RepoRef` into a protected folder, saves the settings and the cloud subscription's service principal there, and starts the worker as SYSTEM. Waits for it, and reports the result. Has the pool's secure tokens, commented out until a pool admin turns them on. |
+| [`readiness-gate.ps1`](readiness-gate.ps1) | Pasted into the **readiness gate** LCA (Running Preinstance Assigned To User) | 45 lines. Runs the readiness gate, and removes the service principal from the VM before the attendee gets it, even if the prepare LCA stopped early. No secure tokens. |
+| [`Invoke-CtfLabSetup.ps1`](Invoke-CtfLabSetup.ps1) | Stays in the repository. The prepare LCA copies it from its clone to `C:\ProgramData\kubecon-ctf-lca`, and both LCAs run it from there. | The worker, in PowerShell 7. Builds the attendee folder, `C:\lab-resources`, without the solutions, and deletes the clone. Deploys the begin state with the attendee folder's [`begin-challenge/azure-cli-powershell/deploy.ps1`](../../begin-challenge/azure-cli-powershell/deploy.ps1), gives the portal user its roles, sets up the lab user, and runs the readiness gate. |
+| [`../build-attendee-content.ps1`](../build-attendee-content.ps1) | Stays in the repository; the worker runs it from the clone | Builds the attendee folder from the challenges, without the solutions, and fails if it finds solution content. See [Attendee content and solutions](../README.md#attendee-content-and-solutions). |
 | [`manual-test-access.ps1`](manual-test-access.ps1) | Pasted into a cloud platform LCA, **test profiles only** | Gives the cloud portal user Owner on the resource group and registers the resource providers, so you can build the begin state by hand. |
 | [`manual-begin-state-bootstrap.txt`](manual-begin-state-bootstrap.txt) | Pasted into PowerShell in a lab VM | The prepare LCA with `Manual = $true`, compressed: builds the begin state by hand, as you. See [Build the begin state by hand](#build-the-begin-state-by-hand). |
 | [`../make-bootstraps.ps1`](../make-bootstraps.ps1) | Your computer | Regenerates the bootstraps after you change `prepare-lab-environment.ps1` or the VM image script. |
@@ -18,15 +19,15 @@ LCAs, but much shorter: the LCAs run the lab repository's own tested deployment 
 
 ## Why the prepare LCA is short
 
-Skillable asked for LAB723's 3,416-line prepare LCA to be reduced. This lab's is 250 lines, mostly
+Skillable asked for LAB723's 3,416-line prepare LCA to be reduced. This lab's is 253 lines, mostly
 comments and the settings block, because it doesn't embed the deployment:
 
-- The **VM image** has the public lab repository in `C:\LabFiles\kubecon26-pre-day-lab`
-  ([VM image runbook](../vm-image/VM-IMAGE-RUNBOOK.md)). The LCA moves it to `RepoRef`, a tag of
-  <https://github.com/bbenz/kubecon26-pre-day-lab>, so a reviewer can read exactly what runs at that tag.
-- The **worker** (`Invoke-CtfLabSetup.ps1`, about 580 lines) and the deployment it calls (`deploy.ps1`
+- The LCA clones `RepoRef`, a branch or tag of <https://github.com/bbenz/kubecon26-pre-day-lab>, so a reviewer
+  can read exactly what runs at that tag. The VM image has no copy of the repository, because the repository has
+  the solutions ([Attendee content and solutions](../README.md#attendee-content-and-solutions)).
+- The **worker** (`Invoke-CtfLabSetup.ps1`, about 680 lines) and the deployment it calls (`deploy.ps1`
   and `shared/azure-cli-powershell`) are the same scripts that the repository's three deployment
-  approaches are tested with, and that people run by hand.
+  approaches are tested with, that people run by hand, and that the attendee's `reset.ps1` runs.
 - The LCA downloads nothing else. The worker installs the `k8s-extension` Azure CLI extension (when
   `InspektorGadget` is on), and the cluster pulls the challenge images from public registries.
 
@@ -84,12 +85,13 @@ release, and ask the pool admin to change only `RepoRef`.
 
 | Step | Result |
 | --- | --- |
-| Repository | `git fetch` of `RepoRef` from `RepoUrl` into the image's copy in `LabRoot`, checked out as the local branch `lab`. If GitHub can't be reached, the image's copy is used, with a warning. The commit is in the logs. |
-| Start | Writes `config.json` (only SYSTEM and administrators can open `C:\ProgramData\kubecon-ctf-lca`), and starts the worker in the **KubeCon CTF LCA worker** scheduled task, as SYSTEM, with a 3-hour limit. A retry of the LCA waits for the running worker instead of starting another. A run with the same settings and commit after a successful run does nothing. |
+| Repository | A shallow `git clone` of `RepoRef` from `RepoUrl` into `C:\ProgramData\kubecon-ctf-lca\repo`, with up to three tries; the LCA fails if they all fail. Copies the worker next to the clone, and runs it from there. The commit is in the logs. |
+| Start | Writes `config.json` (only SYSTEM and administrators can open `C:\ProgramData\kubecon-ctf-lca`), and starts the worker in the **KubeCon CTF LCA worker** scheduled task, as SYSTEM, with a 3-hour limit. A retry of the LCA waits for the running worker instead of starting another. A run with the same settings and commit after a successful run deletes the clone and does nothing else. |
+| Attendee files | Builds `LabResources` (`C:\lab-resources`) from the clone with `skillable/build-attendee-content.ps1`: each challenge's `README.md`, manifests, and settings, `deploy.ps1` and its module, the scoring scripts, and the attendee's `README.md`, `check.ps1`, and `reset.ps1`. No `SOLUTION.md`, feasibility notes, or end state: the script fails if it finds any. Then deletes the clone (and, on an image built with an earlier image script, `C:\LabFiles\kubecon26-pre-day-lab`). Keeps `setup-logs`. Required. |
 | Azure sign-in | The service principal, in the worker's own Azure CLI profile, with retries for up to 5 minutes |
 | Resource group | Reads the resource group's region. The lab's resources go there, unless `Location` is set. |
 | Resource providers | Registers missing providers, and waits up to 10 minutes: ContainerService, Compute, Network, ManagedIdentity, PolicyInsights, CognitiveServices, KeyVault, Monitor, Insights, OperationalInsights, AlertsManagement, Dashboard, Storage, KubernetesConfiguration. Warning only. |
-| Begin state | `deploy.ps1 -ResourceGroup <rg> -Location <region> -ClusterName aks-kubecon-ctf -Challenges <list>`: Azure Monitor and Log Analytics workspaces, the AKS Automatic cluster with the application routing add-on (managed NGINX and Gateway API), Managed Prometheus, the C4 Foundry account and model deployment, the A4 Key Vault and identity, and each challenge with its seeded fault. Its output is in the log. Required: the LCA fails if it fails. |
+| Begin state | Writes `lab-settings.json` in the attendee folder (resource group, region, cluster, and subscription, for `check.ps1` and `reset.ps1`), and runs the attendee folder's `deploy.ps1 -ResourceGroup <rg> -Location <region> -ClusterName aks-kubecon-ctf -Challenges <list>`: Azure Monitor and Log Analytics workspaces, the AKS Automatic cluster with the application routing add-on (managed NGINX and Gateway API), Managed Prometheus, the C4 Foundry account and model deployment, the A4 Key Vault and identity, and each challenge with its seeded fault. Its output is in the log. Required: the LCA fails if it fails. |
 | Portal user access | The portal user's roles (see [Identities and roles](#identities-and-roles)). Warning only; the readiness gate fails without the cluster role. |
 | Attendee Azure CLI | The lab user's Azure CLI: browser sign-in (`core.enable_broker_on_windows=false`), so `az login` reuses the attendee's portal session in Edge; no subscription prompt, telemetry, or survey. Removes a service principal sign-in if one is there. The attendee isn't signed in. |
 | Inspektor Gadget | Only with `InspektorGadget = $true` (off by default): the `microsoft.inspektorgadget` AKS cluster extension (preview), without waiting for it to finish, and up to 4 minutes for a ready `gadget` pod. On AKS Automatic, its DaemonSet never reports every pod ready: an AKS policy (`aks-managed-restrict-hosted-vm-node-pinning`) denies its pods on the AKS-managed hosted system nodes, and a full node leaves its pod (200m CPU, 400 MiB) Pending, so the extension can stay in **Creating**. Pods on the lab's other nodes work, which is what A1's optional DNS tracing needs. Warning only. |
@@ -104,7 +106,7 @@ with theirs.
 
 - `C:\ProgramData\kubecon-ctf-lca\prepare-<time>.log` and `verify-<time>.log`: everything, including
   `deploy.ps1`'s output. `state-prepare.json` and `state-verify.json` have the steps and checks.
-- A copy of each log, ending with a summary, in `.lab\skillable` in the lab folder
+- A copy of each log, ending with a summary, in `C:\lab-resources\setup-logs`
   (`begin-state-<time>.log`, `readiness-gate-<time>.log`), where a proctor can open it in VS Code.
 
 | Result | When | What Skillable sees |
@@ -113,7 +115,7 @@ with theirs.
 | Incomplete | A step warned, or a check failed while `GateFailsPrepare` is `$false` | Success, with `KubeCon CTF prepare finished, but the environment isn't complete.` A retry repeats every step. |
 | Failed | A required step failed, or a check failed while `GateFailsPrepare` is `$true` | Failure. Skillable retries the LCA, then applies the error action. |
 
-Each result ends with `Summary for troubleshooting: <log in .lab\skillable>` and the total elapsed time.
+Each result ends with `Summary for troubleshooting: <log in C:\lab-resources\setup-logs>` and the total elapsed time.
 
 ## Before you start
 
@@ -176,8 +178,8 @@ The settings block near the top of `prepare-lab-environment.ps1`:
 | `ClusterName` | `aks-kubecon-ctf` | Also the kubectl context name |
 | `Challenges` | `all` | Or a list, such as `c1,c2,c3,c4` |
 | `InspektorGadget` | `$false` | `$true` adds the Inspektor Gadget AKS cluster extension (preview), for A1's optional DNS tracing. See **Inspektor Gadget** in [What the prepare LCA does](#what-the-prepare-lca-does) for its limits on AKS Automatic. Attendees can also deploy it themselves, or through AKS-MCP. |
-| `RepoUrl`, `RepoRef` | `https://github.com/bbenz/kubecon26-pre-day-lab`, `main` | Use a tag for the event, such as `v1.0.0`, so every lab gets the same tested scripts |
-| `LabRoot` | `C:\LabFiles\kubecon26-pre-day-lab` | The image's copy of the repository |
+| `RepoUrl`, `RepoRef` | `https://github.com/bbenz/kubecon26-pre-day-lab`, `main` | A branch or tag (not a commit hash). Use a tag for the event, such as `v1.0.0`, so every lab gets the same tested scripts and instructions. |
+| `LabResources` | `C:\lab-resources` | The attendee folder. The image's shortcuts open it in VS Code, and the lab instructions' commands use it. |
 | `RemoveCredentials` | `AfterGate` | `AfterGate`: the readiness gate LCA removes the service principal. `AfterPrepare`: a clean prepare run does, for a profile without the readiness gate LCA. `Never`: testing only. |
 | `GateFailsPrepare` | `$false` | `$true` for the event: a failed readiness gate fails the prepare LCA, and End Lab discards the preinstance |
 | `WaitMinutes` | `50` | How long the LCA waits for the worker. Keep it 10 minutes below the Timeout. The worker keeps running, and a retry waits for it. |
@@ -190,27 +192,30 @@ preinstance is assigned.
 
 | Severity | Checks |
 | --- | --- |
-| Fail | **Azure sign-in** (the worker's profile, in the lab's subscription), **Cluster** (power state Running, and provisioning not Failed; AKS Automatic's own background updates show as Updating), **Nodes** (at least one Ready), **Challenge namespaces** (all selected), **Challenge workloads** (every challenge namespace has pods; some fail on purpose), **Portal user access** (AKS RBAC Cluster Admin), **kubeconfig** (the lab user's current context is the cluster, in kubelogin `azurecli` mode), **Attendee Azure CLI** (not signed in, browser sign-in on), **Lab folder** (the repository and its rendered manifests) |
+| Fail | **Azure sign-in** (the worker's profile, in the lab's subscription), **Cluster** (power state Running, and provisioning not Failed; AKS Automatic's own background updates show as Updating), **Nodes** (at least one Ready), **Challenge namespaces** (all selected), **Challenge workloads** (every challenge namespace has pods; some fail on purpose), **Portal user access** (AKS RBAC Cluster Admin), **kubeconfig** (the lab user's current context is the cluster, in kubelogin `azurecli` mode), **Attendee Azure CLI** (not signed in, browser sign-in on), **Attendee files** (`C:\lab-resources` has `check.ps1`, `reset.ps1`, `lab-settings.json`, `deploy.ps1`, the scoring scripts, each selected challenge's instructions, and the rendered manifests), **No solutions on the VM** (no repository clone, `SOLUTION.md`, `challenge-end-state`, or `.git` in `C:\lab-resources`, `C:\LabFiles`, or `C:\ProgramData\kubecon-ctf-lca`) |
 | Warning | **Portal user monitoring access** (Monitoring Data Reader, for A2's dashboards with Grafana), **Inspektor Gadget** (with `InspektorGadget = $true`: at least one `gadget` pod is ready), **Lab tools** (the image's tools, and Azure CLI 2.86 or later) |
 | Fail, when the credentials are removed | **Cloud credentials removed**: the worker's Azure CLI profile is gone, the PowerShell event logs are cleared, and no event has the service principal's application ID |
 
 ## Test a launch
 
 1. Launch the profile. When the lab is displayable, wait for the prepare LCA. A first run takes 20 to 30 minutes.
-2. In the VM, open `.lab\skillable` in the lab folder in VS Code. The newest `begin-state-*.log` ends with
-   the summary and the readiness gate table. The full log is in `C:\ProgramData\kubecon-ctf-lca` (elevated).
+2. In the VM, VS Code shows `C:\lab-resources`. Open `setup-logs`: the newest `begin-state-*.log` ends with the
+   summary and the readiness gate table. The full log is in `C:\ProgramData\kubecon-ctf-lca` (elevated).
 3. In the VS Code terminal, run `az login`, and select the lab account you signed in to the portal with. Then
-   run `kubectl get nodes`, `kubectl get ns`, and `pwsh ./scoring/verify.ps1 -Quick -NoReport`: every challenge
-   shows **NOT PASSED**, because the begin state has the seeded faults.
-4. To run the readiness gate yourself (a test launch without preinstances doesn't), open PowerShell as
+   run `kubectl get nodes`, `kubectl get ns`, and `C:\lab-resources\check.ps1 -Quick -NoReport`: every challenge
+   shows **NOT PASSED**, because the begin state has the seeded faults. Run `C:\lab-resources\reset.ps1 c1`, and
+   confirm: it takes 2 to 5 minutes, as the attendee.
+4. Confirm that the VM has no solutions: the gate's **No solutions on the VM** row passed, and
+   `Get-ChildItem C:\ -Recurse -Force -Filter SOLUTION.md -ErrorAction SilentlyContinue` finds nothing.
+5. To run the readiness gate yourself (a test launch without preinstances doesn't), open PowerShell as
    administrator, and run the following command. Like the readiness gate LCA, it then removes the service
    principal's sign-in and clears the PowerShell event logs, unless `RemoveCredentials` is `Never`:
 
     ```powershell
-    & 'C:\Program Files\PowerShell\7\pwsh.exe' -File C:\LabFiles\kubecon26-pre-day-lab\skillable\lca\Invoke-CtfLabSetup.ps1 -Mode Verify
+    & 'C:\Program Files\PowerShell\7\pwsh.exe' -File C:\ProgramData\kubecon-ctf-lca\Invoke-CtfLabSetup.ps1 -Mode Verify
     ```
 
-5. Confirm that `C:\ProgramData\kubecon-ctf-lca\azure-cli` no longer exists, and that the gate's last row,
+6. Confirm that `C:\ProgramData\kubecon-ctf-lca\azure-cli` no longer exists, and that the gate's last row,
    **Cloud credentials removed**, passed.
 
 ## Build the begin state by hand
@@ -229,8 +234,9 @@ cloud portal user, in a running lab:
    the readiness gate in the window, and takes 20 to 30 minutes. To run it again, run
    `powershell -ExecutionPolicy Bypass -File C:\LabSetup\kubecon-ctf-begin-state.ps1` as administrator.
 
-Outside Skillable, or in a lab VM, you can also run the deployment directly, the way the repository's README
-describes: `pwsh ./begin-challenge/azure-cli-powershell/deploy.ps1 -ResourceGroup <rg>`.
+Outside Skillable, you can also run the deployment directly from a clone of the repository, the way its README
+describes: `pwsh ./begin-challenge/azure-cli-powershell/deploy.ps1 -ResourceGroup <rg>`. Don't clone the repository
+in a lab VM that an attendee gets: the clone has the solutions.
 
 ## GitHub Copilot, AKS-MCP, and az aks agent
 
@@ -271,7 +277,10 @@ that it has the attendee's `@lab.User` name. Never commit the generated script.
 | Skillable reports unsupported characters | Paste from the `.ps1` file. The scripts are ASCII only. |
 | `C:\Program Files\PowerShell\7\pwsh.exe is missing` | The VM image predates PowerShell 7. Rebuild it with the current image script. |
 | `Expected one signed-in user, found 0` | Automatic sign-in isn't working in the image. See the VM image runbook. |
-| Log: `WARNING: couldn't fetch <RepoRef>` | The VM couldn't reach GitHub, or the tag doesn't exist. The image's copy was used. Check `RepoRef`. |
+| `git clone of <RepoRef> from <RepoUrl> failed 3 times` | The VM couldn't reach GitHub, or `RepoRef` isn't a branch or tag of `RepoUrl`. Check both, and retry. |
+| **FAIL** Attendee files step: `The attendee folder C:\lab-resources has problems: ... mentions solutions` (or another check) | A challenge's `README.md`, or another file in a challenge folder, has proctor-only content at `RepoRef`. Fix it in the repository (`./skillable/build-attendee-content.ps1 -Check` shows the same), tag a release, and change `RepoRef`. |
+| **FAIL** Attendee files step: `... has files that an attendee folder doesn't have` | Something else is in `C:\lab-resources`. The script never empties a folder that isn't an attendee folder: check the image. |
+| **FAIL** No solutions on the VM | Something put the repository or a solution on the VM: usually an image built with an earlier image setup script, or a manual test. Delete what the check lists, or discard the preinstance, and rebuild the image with the current script, whose verification checks this. |
 | `The service principal couldn't sign in and see the subscription within 5 minutes` | Read the last error. Check the pool's health in Skillable Studio, and relaunch. |
 | **WARN** Resource providers: `Can't read the subscription's resource providers` | The service principal has no subscription-level read. The deployment fails later if a provider is missing: register them in the pool, or use `manual-test-access.ps1`. |
 | **FAIL** Begin state (deploy.ps1) | Read the `\|` lines before it in the log, which are `deploy.ps1`'s output. Usual causes: `RequestDisallowedByPolicy` (the ACP blocks a type, region, or size), `InsufficientQuota` or `quota` at C4 (no `gpt-6-luna` Global Standard quota: ask Skillable, or leave `c4` out), or a region without AKS Automatic. Fix the cause and retry: `deploy.ps1` reuses what exists. |
@@ -281,7 +290,8 @@ that it has the attendee's `@lab.User` name. Never commit the generated script.
 | `KubeCon CTF prepare is still running after 50 minutes` | The worker keeps running, and a retry waits for it. If it happens often, raise the Timeout and `WaitMinutes`. |
 | **FAIL** Cloud credentials removed | Don't give the VM to an attendee. Delete `C:\ProgramData\kubecon-ctf-lca\azure-cli`, run `wevtutil cl Microsoft-Windows-PowerShell/Operational` and `wevtutil cl "Windows PowerShell"` as administrator, or discard the preinstance. |
 | **FAIL** Azure sign-in in the readiness gate LCA | The worker's profile is already gone, for example because the gate already ran. Run the prepare LCA again. |
-| An attendee's `kubectl` says to run `az login`, or `verify.ps1` can't reach the cluster | Expected until the attendee runs `az login`. If it continues, they signed in with another account: run `az login` again with the lab account. |
+| An attendee's `kubectl` says to run `az login`, or `check.ps1` can't reach the cluster | Expected until the attendee runs `az login`. If it continues, they signed in with another account: run `az login` again with the lab account. |
+| An attendee's `reset.ps1` fails | Read its output: it's `deploy.ps1`'s. Run it again; it reuses what exists. `AuthorizationFailed`: the portal user's roles are missing (see the gate's **Portal user access** row). |
 | Manual: `Run this script in PowerShell as administrator` | Open Windows PowerShell with **Run as administrator**, and paste the bootstrap again. |
 | Manual: `Hash mismatch` or `Decode failed` | A part was missed or pasted twice. Open a new window, and paste all the parts again. |
 | Manual: `AuthorizationFailed` on a role assignment in the log | Your lab account isn't Owner of the resource group. See step 1 of [Build the begin state by hand](#build-the-begin-state-by-hand). |

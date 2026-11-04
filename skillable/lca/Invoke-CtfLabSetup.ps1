@@ -5,17 +5,22 @@
 .DESCRIPTION
     Builds and checks one attendee's lab environment. Two short LCA scripts in this folder run it:
 
-      prepare-lab-environment.ps1  First Displayable. Saves the settings and the cloud subscription's
-                                   service principal to config.json, and runs this script with
-                                   -Mode Prepare as SYSTEM, in a scheduled task.
+      prepare-lab-environment.ps1  First Displayable. Clones the lab repository at RepoRef into
+                                   C:\ProgramData\kubecon-ctf-lca\repo, copies this script next to it, saves
+                                   the settings and the cloud subscription's service principal to config.json,
+                                   and runs this script with -Mode Prepare as SYSTEM, in a scheduled task.
       readiness-gate.ps1           Running Preinstance Assigned To User. Runs it with -Mode Verify.
 
-    Prepare  Signs in as the service principal in its own Azure CLI profile, registers the lab's
-             resource providers, and deploys the BEGIN state of the selected challenges with
-             begin-challenge/azure-cli-powershell/deploy.ps1, the same script that people run by hand.
-             Then it gives the cloud portal user its roles, sets up the lab user's Azure CLI for browser
-             sign-in, optionally installs the Inspektor Gadget cluster extension, and runs the
-             readiness gate. deploy.ps1 writes the lab user's kubeconfig (KUBECONFIG points at it).
+    Prepare  Builds the attendee folder, C:\lab-resources, from the clone with
+             skillable/build-attendee-content.ps1: the challenges' instructions without the solutions, and
+             the scripts that check and reset them. Then it deletes the clone, so the VM never has the
+             solutions. It signs in as the service principal in its own Azure CLI profile, registers the
+             lab's resource providers, and deploys the BEGIN state of the selected challenges with the
+             attendee folder's begin-challenge/azure-cli-powershell/deploy.ps1, the same script that people
+             run by hand, and that the attendee's reset.ps1 runs. Then it gives the cloud portal user its
+             roles, sets up the lab user's Azure CLI for browser sign-in, optionally installs the Inspektor
+             Gadget cluster extension, and runs the readiness gate. deploy.ps1 writes the lab user's
+             kubeconfig (KUBECONFIG points at it).
     Verify   Runs the readiness gate, and then removes the service principal from the VM: it deletes
              the service principal's Azure CLI profile, and clears the PowerShell event logs, which
              hold the prepare LCA's text with the secret.
@@ -24,7 +29,7 @@
     window as the signed-in Azure CLI user instead of the service principal, for testing.
 
     Logs and state are in C:\ProgramData\kubecon-ctf-lca. A copy of each log, ending with a summary,
-    goes to .lab\skillable in the lab folder, where a proctor can open it in VS Code.
+    goes to setup-logs in the attendee folder, where a proctor can open it in VS Code.
     LCA-RUNBOOK.md in this folder has the details.
 #>
 #Requires -Version 7.4
@@ -50,7 +55,14 @@ if ($Secret) {
 }
 $Manual       = [bool]$Cfg.Manual
 $LcaDir       = Split-Path -Parent (Resolve-Path -LiteralPath $ConfigPath).Path
-$RepoRoot     = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+# The attendee folder, and the prepare LCA's clone of the lab repository that it's built from. The clone only
+# exists until the Attendee files step: in Verify mode, the scripts come from the attendee folder.
+$LabResources = if ([string]$Cfg.LabResources) { [string]$Cfg.LabResources } else { 'C:\lab-resources' }
+$CloneDir     = [string]$Cfg.CloneDir
+$HasClone     = [bool]$CloneDir -and (Test-Path -LiteralPath (Join-Path $CloneDir 'skillable\build-attendee-content.ps1'))
+$CodeRoot     = if ($HasClone) { $CloneDir } else { $LabResources }
+# Images built with an earlier version of the image setup script have a clone of the repository here.
+$OldRepoClone = 'C:\LabFiles\kubecon26-pre-day-lab'
 $RG           = [string]$Cfg.ResourceGroup
 $Cluster      = [string]$Cfg.ClusterName
 $LabAzureDir  = Join-Path $Cfg.LabProfile '.azure'
@@ -81,9 +93,17 @@ $env:AZURE_CONFIG_DIR = $AzureDir
 $env:KUBECONFIG = $Kubeconfig
 $env:AZURE_CORE_COLLECT_TELEMETRY = 'false'
 $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
-Import-Module (Join-Path $RepoRoot 'shared\azure-cli-powershell\CtfLab.psm1') -Force
-$AllChallenges = & (Get-Module CtfLab) { $script:AllChallenges }
-$Namespaces = & (Get-Module CtfLab) { $script:Namespaces }
+# A failure here mustn't stop a readiness gate before it removes the credentials: Initialize-Context reports it.
+$ModuleError = ''
+$AllChallenges = @()
+$Namespaces = @{}
+try {
+    Import-Module (Join-Path $CodeRoot 'shared\azure-cli-powershell\CtfLab.psm1') -Force
+    $AllChallenges = & (Get-Module CtfLab) { $script:AllChallenges }
+    $Namespaces = & (Get-Module CtfLab) { $script:Namespaces }
+} catch {
+    $ModuleError = "Can't load the lab's PowerShell module from ${CodeRoot}: $($_.Exception.Message)"
+}
 $Selected = @(([string]$Cfg.Challenges -split '[,\s]+') | Where-Object { $_ } | ForEach-Object { $_.ToLowerInvariant() })
 if (-not $Selected -or $Selected -contains 'all') { $Selected = $AllChallenges }
 
@@ -91,7 +111,7 @@ if (-not $Selected -or $Selected -contains 'all') { $Selected = $AllChallenges }
 # Logging, state, and tools
 # ---------------------------------------------------------------------------------------------
 try {
-    $copyDir = Join-Path $RepoRoot '.lab\skillable'
+    $copyDir = Join-Path $LabResources 'setup-logs'
     New-Item -ItemType Directory -Path $copyDir -Force | Out-Null
     $CopyPath = Join-Path $copyDir ('{0}-{1}.log' -f $(if ($Mode -eq 'Verify') { 'readiness-gate' } else { 'begin-state' }), $Stamp)
 } catch { $CopyPath = '' }
@@ -219,6 +239,7 @@ function Test-RoleAssignment([string]$PrincipalId, [string]$Role, [string]$Scope
 # Prepare steps
 # ---------------------------------------------------------------------------------------------
 function Initialize-Context {
+    if ($ModuleError) { throw $ModuleError }
     foreach ($name in 'ResourceGroup', 'TenantId', 'SubscriptionId', 'ClusterName') {
         if (-not (Test-Resolved $Cfg.$name)) { throw "$name has no value. Check the prepare LCA's settings and its CLOUD CREDENTIALS section." }
     }
@@ -235,6 +256,41 @@ function Initialize-Context {
     $who = [Security.Principal.WindowsIdentity]::GetCurrent().Name
     $how = if ($Manual) { 'Manual run, with your own Azure CLI sign-in' } else { 'Life cycle action' }
     return "$how. Runs as $who. Lab user $($Cfg.LabUser) ($($Cfg.LabProfile)). Repository commit $($Cfg.RepoCommit)."
+}
+
+function Remove-RepositoryCopy {
+    # Only the prepare LCA's own clone, in its protected folder: never a repository that someone works in.
+    $removed = [Collections.Generic.List[string]]::new()
+    if ($CloneDir -and $CloneDir.StartsWith("$LcaDir\", [StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath $CloneDir)) {
+        Remove-Item -LiteralPath $CloneDir -Recurse -Force
+        $removed.Add($CloneDir)
+    }
+    if (-not $Manual -and (Test-Path -LiteralPath (Join-Path $OldRepoClone 'begin-challenge'))) {
+        Remove-Item -LiteralPath $OldRepoClone -Recurse -Force
+        $removed.Add($OldRepoClone)
+    }
+    return $removed
+}
+
+function Install-AttendeeFiles {
+    # What attendees need, without the solutions, from the clone; then the clone goes. A run without a clone, such
+    # as a proctor's rerun of the copy of this script, uses the attendee folder that's already there.
+    if ($HasClone) {
+        & (Join-Path $CloneDir 'skillable\build-attendee-content.ps1') -Destination $LabResources 6>&1 | ForEach-Object { Write-Log "  | $_" }
+        if (-not $Manual -and (Test-Resolved $Cfg.LabUser)) {
+            # C:\ usually lets every signed-in user change new folders. Make sure the attendee can, for reset.ps1.
+            $grant = & icacls.exe $LabResources /grant "$($Cfg.LabUser):(OI)(CI)M" /Q 2>&1
+            if ($LASTEXITCODE -ne 0) { Write-Log "  Couldn't give $($Cfg.LabUser) Modify on ${LabResources}: $grant" }
+        }
+        $built = "Built $LabResources from the repository at $($Cfg.RepoCommit)"
+    } elseif (Test-Path -LiteralPath (Join-Path $LabResources 'begin-challenge\azure-cli-powershell\deploy.ps1')) {
+        $built = "Reused $LabResources (no clone of the repository in this run)"
+    } else {
+        throw "There's no clone of the lab repository in $CloneDir, and no attendee folder in $LabResources. Run the prepare LCA again."
+    }
+    $removed = @(Remove-RepositoryCopy)
+    $note = if ($removed) { " Deleted $($removed -join ' and ')." } else { '' }
+    return "$built, without the solutions.$note"
 }
 
 function Connect-Azure {
@@ -285,7 +341,13 @@ function Register-Providers {
 }
 
 function Invoke-BeginState {
-    $deploy = Join-Path $RepoRoot 'begin-challenge\azure-cli-powershell\deploy.ps1'
+    # reset.ps1 in the attendee folder reads these settings, and deploys a challenge again with the same deploy.ps1.
+    $settings = [ordered]@{
+        resourceGroup = $RG; clusterName = $Cluster; location = $Location; subscriptionId = [string]$Cfg.SubscriptionId
+        tenantId = [string]$Cfg.TenantId; portalUser = [string]$Cfg.PortalUser; repoCommit = [string]$Cfg.RepoCommit
+    }
+    [IO.File]::WriteAllText((Join-Path $LabResources 'lab-settings.json'), (ConvertTo-Json -InputObject $settings), [Text.UTF8Encoding]::new($false))
+    $deploy = Join-Path $LabResources 'begin-challenge\azure-cli-powershell\deploy.ps1'
     $pwsh = (Get-Process -Id $PID).Path
     $arguments = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $deploy, '-ResourceGroup', $RG,
                    '-Location', $Location, '-ClusterName', $Cluster, '-Challenges', ($Selected -join ','))
@@ -377,6 +439,21 @@ function Add-Check([string]$Name, [bool]$Passed, [string]$Detail, [string]$Sever
     $Checks.Add([pscustomobject]@{ check = $Name; result = $(if ($Passed) { 'PASS' } else { $Severity }); detail = $Detail })
 }
 
+function Find-SolutionContent {
+    # The attendee mustn't find the solutions: no clone of the repository, SOLUTION.md, or end state.
+    $found = [Collections.Generic.List[string]]::new()
+    if ($CloneDir -and (Test-Path -LiteralPath $CloneDir)) { $found.Add($CloneDir) }
+    foreach ($root in $LabResources, 'C:\LabFiles', $LcaDir) {
+        if (-not (Test-Path -LiteralPath $root)) { continue }
+        foreach ($item in Get-ChildItem -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue) {
+            if (($item.PSIsContainer -and $item.Name -in 'challenge-end-state', '.git') -or (-not $item.PSIsContainer -and $item.Name -eq 'SOLUTION.md')) {
+                $found.Add($item.FullName)
+            }
+        }
+    }
+    return $found
+}
+
 function Invoke-Check([string]$Name, [string]$Severity, [scriptblock]$Test) {
     try {
         $r = & $Test
@@ -460,9 +537,20 @@ function Test-Readiness {
         @{ Ok = ($missing.Count -eq 0 -and $azVersion -ge [version]'2.86.0')
            Detail = "Azure CLI $azVersion. $(if ($missing) { "Missing: $($missing -join ', ')" } else { 'All lab tools are present.' })" }
     }
-    Invoke-Check 'Lab folder' 'FAIL' {
-        $rendered = Join-Path $RepoRoot ".lab\rendered\$RG"
-        @{ Ok = ((Test-Path (Join-Path $RepoRoot 'begin-challenge\challenges')) -and (Test-Path $rendered)); Detail = "$RepoRoot, with $rendered" }
+    Invoke-Check 'Attendee files' 'FAIL' {
+        $required = @('README.md', 'check.ps1', 'reset.ps1', 'lab-settings.json', 'begin-challenge\azure-cli-powershell\deploy.ps1',
+                      'scoring\verify.ps1', 'shared\azure-cli-powershell\CtfLab.psm1', ".lab\rendered\$RG") +
+                    @($Selected | ForEach-Object { "begin-challenge\challenges\$_-*\README.md" })
+        $missing = @($required | Where-Object { -not (Test-Path -Path (Join-Path $LabResources $_)) })
+        @{ Ok = ($missing.Count -eq 0)
+           Detail = $(if ($missing) { "Missing in ${LabResources}: $($missing -join ', ')" }
+                      else { "$LabResources has the instructions of $($Selected.Count) challenges, check.ps1, and reset.ps1" }) }
+    }
+    Invoke-Check 'No solutions on the VM' 'FAIL' {
+        $found = @(Find-SolutionContent)
+        @{ Ok = ($found.Count -eq 0)
+           Detail = $(if ($found) { "Found $($found.Count): $(($found | Select-Object -First 5) -join '; ')" }
+                      else { "No repository clone, SOLUTION.md, or end state in $LabResources, C:\LabFiles, or $LcaDir" }) }
     }
     foreach ($c in $Checks) { Write-Log ('  {0,-5} {1,-30} {2}' -f $c.result, $c.check, $c.detail) }
     return @($Checks | Where-Object { $_.result -eq 'FAIL' }).Count
@@ -554,6 +642,7 @@ try {
     Save-State 'Running' 'Starting'
     if ($Mode -eq 'Prepare') {
         Invoke-Step 'Context' { Initialize-Context }
+        Invoke-Step 'Attendee files' { Install-AttendeeFiles }
         Invoke-Step 'Azure sign-in' { Connect-Azure }
         Invoke-Step 'Resource group' { Initialize-ResourceGroup }
         Invoke-Step 'Resource providers' { Register-Providers } -Optional
@@ -564,6 +653,11 @@ try {
     } else {
         Invoke-Step 'Prepare result' { Wait-ForPrepare }
         Invoke-Step 'Context' { Initialize-Context }
+        # The prepare worker deletes its clone. If a run stopped before that, delete it before the attendee gets the VM.
+        Invoke-Step 'Repository clone' {
+            $removed = @(Remove-RepositoryCopy)
+            if ($removed) { "Deleted $($removed -join ' and ')" } else { 'No clone of the lab repository in the VM' }
+        }
     }
     $failures = Test-Readiness
     if (Test-RemoveCredentials $failures) { $failures += Remove-CloudCredential }
@@ -578,6 +672,8 @@ try {
     $message = $_.Exception.Message
     Write-Log "STOPPED: $message"
 } finally {
+    # The VM must never keep the clone, which has the solutions, even if a step stopped early.
+    try { Remove-RepositoryCopy | Out-Null } catch { Write-Log "Couldn't delete the repository clone. $($_.Exception.Message)" }
     # The attendee gets the VM next, so a readiness gate that stops early still removes the credentials.
     if ($Mode -eq 'Verify' -and -not $Manual -and -not $CredentialsRemoved -and [string]$Cfg.RemoveCredentials -ne 'Never') {
         try { Remove-CloudCredential | Out-Null } catch { Write-Log "Couldn't remove the cloud credentials. $($_.Exception.Message)" }

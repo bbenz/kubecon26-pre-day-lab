@@ -92,11 +92,15 @@ bash library, PowerShell module and Terraform module the Azure deployment uses â
 
 [skillable/](skillable/README.md) has everything to run the lab on Skillable, modeled on the LAB723 (Ignite 2026)
 artifacts: a **VM image setup script** with a paste-in bootstrap (Azure CLI with aks-agent, kubectl, kubelogin,
-Helm, GitHub CLI, AKS desktop, Inspektor Gadget, VS Code with Copilot and AKS-MCP, PowerShell 7, WSL, and this
-repository), and **life cycle actions**: a 250-line prepare LCA that deploys the begin state with
-`begin-challenge/azure-cli-powershell/deploy.ps1` as the cloud subscription's service principal, gives the attendee
-**Azure Kubernetes Service RBAC Cluster Admin**, and runs a readiness gate, and a readiness gate LCA that removes
-the service principal from the VM before the attendee gets it. Runbooks:
+Helm, GitHub CLI, AKS desktop, Inspektor Gadget, VS Code with Copilot and AKS-MCP, PowerShell 7, and WSL), and
+**life cycle actions**: a 250-line prepare LCA that clones this repository at the event's tag, builds the attendee
+folder `C:\lab-resources` without the solutions, deletes the clone, deploys the begin state with the attendee
+folder's `deploy.ps1` as the cloud subscription's service principal, gives the attendee **Azure Kubernetes Service
+RBAC Cluster Admin**, and runs a readiness gate, and a readiness gate LCA that removes the service principal from
+the VM before the attendee gets it. The attendee content, [skillable lab steps.md](skillable/skillable%20lab%20steps.md)
+(the Skillable instructions) and the attendee folder, is generated from the challenge READMEs by
+[skillable/build-attendee-content.ps1](skillable/build-attendee-content.ps1), so this repository stays the single
+source of truth and attendees never get `SOLUTION.md`, the feasibility notes, or the end state. Runbooks:
 [VM image](skillable/vm-image/VM-IMAGE-RUNBOOK.md), [LCAs](skillable/lca/LCA-RUNBOOK.md).
 
 ## Event leaderboard (optional)
