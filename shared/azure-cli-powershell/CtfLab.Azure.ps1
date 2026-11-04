@@ -246,10 +246,25 @@ function Install-CtfC4Azure {
         # Keys off: the app must authenticate with Microsoft Entra ID (workload identity).
         try { Invoke-CtfAzRest -Method patch -Url "https://management.azure.com$($aoaiId)?api-version=2024-10-01" -Body @{ properties = @{ disableLocalAuth = $true } } }
         catch { Write-CtfWarn "could not disable key authentication on $($c.AoaiAccount)" }
+        # The update is asynchronous: a model deployment created while it runs fails with RequestConflict.
+        $settled = Invoke-CtfRetry -Attempts 30 -DelaySeconds 10 -Action {
+            (Invoke-AzTsv cognitiveservices account show -g $c.ResourceGroup -n $c.AoaiAccount --query properties.provisioningState) -eq 'Succeeded'
+        }
+        if (-not $settled) { Write-CtfWarn "Foundry account $($c.AoaiAccount) is still updating after 5 minutes" }
         if (-not (Test-AzCommand cognitiveservices account deployment show -g $c.ResourceGroup -n $c.AoaiAccount --deployment-name $c.DeploymentName)) {
-            Invoke-AzCommand cognitiveservices account deployment create -g $c.ResourceGroup -n $c.AoaiAccount `
-                --deployment-name $c.DeploymentName --model-name $c.ModelName --model-version $c.ModelVersion `
-                --model-format OpenAI --sku-name GlobalStandard --sku-capacity $c.ModelCapacity -o none | Out-Null
+            for ($attempt = 1; ; $attempt++) {
+                try {
+                    Invoke-AzCommand cognitiveservices account deployment create -g $c.ResourceGroup -n $c.AoaiAccount `
+                        --deployment-name $c.DeploymentName --model-name $c.ModelName --model-version $c.ModelVersion `
+                        --model-format OpenAI --sku-name GlobalStandard --sku-capacity $c.ModelCapacity -o none | Out-Null
+                    break
+                }
+                catch {
+                    if ($attempt -ge 6 -or $_.Exception.Message -notmatch 'RequestConflict|Another operation') { throw }
+                    Write-CtfInfo "The Foundry account is busy (attempt $attempt of 6) - retrying in 20 seconds ..."
+                    Start-Sleep -Seconds 20
+                }
+            }
         }
         Write-CtfOk "model deployment '$($c.DeploymentName)' ($($c.ModelName) $($c.ModelVersion), GlobalStandard x$($c.ModelCapacity))"
     }

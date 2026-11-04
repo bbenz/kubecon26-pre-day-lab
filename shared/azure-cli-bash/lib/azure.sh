@@ -233,6 +233,31 @@ ctf_purge_deleted_aoai() {
 }
 
 # Challenge C4: Microsoft Foundry (Azure OpenAI) model deployment + workload identity for ai-service.
+ctf_aoai_settled() {
+  [ "$(az_tsv cognitiveservices account show -g "$RESOURCE_GROUP" -n "$AOAI_ACCOUNT" --query properties.provisioningState)" = Succeeded ]
+}
+
+# Retries while the account is busy with another operation (RequestConflict); other errors fail at once.
+ctf_create_aoai_deployment() {
+  local attempt=1 err
+  while :; do
+    if err=$(az cognitiveservices account deployment create -g "$RESOURCE_GROUP" -n "$AOAI_ACCOUNT" \
+        --deployment-name "$AOAI_DEPLOYMENT_NAME" --model-name "$AOAI_MODEL_NAME" \
+        --model-version "$AOAI_MODEL_VERSION" --model-format OpenAI \
+        --sku-name GlobalStandard --sku-capacity "$AOAI_CAPACITY" --only-show-errors -o none 2>&1); then
+      return 0
+    fi
+    case "$err" in
+      *RequestConflict*|*"Another operation"*) ;;
+      *) printf '%s\n' "$err" >&2; return 1 ;;
+    esac
+    if [ "$attempt" -ge 6 ]; then printf '%s\n' "$err" >&2; return 1; fi
+    log_info "The Foundry account is busy (attempt $attempt of 6) - retrying in 20 seconds ..."
+    attempt=$((attempt + 1))
+    sleep 20
+  done
+}
+
 ctf_ensure_c4_azure() {
   ctf_selected c4 || return 0
   log_step "C4: Microsoft Foundry model deployment and ai-service identity"
@@ -250,12 +275,11 @@ ctf_ensure_c4_azure() {
     ctf_az_rest --method patch --url "https://management.azure.com${AOAI_ID}?api-version=2024-10-01" \
       --body '{"properties":{"disableLocalAuth":true}}' \
       || log_warn "could not disable key authentication on $AOAI_ACCOUNT"
+    # The update is asynchronous: a model deployment created while it runs fails with RequestConflict.
+    retry 30 10 ctf_aoai_settled || log_warn "Foundry account $AOAI_ACCOUNT is still updating after 5 minutes"
     if ! az cognitiveservices account deployment show -g "$RESOURCE_GROUP" -n "$AOAI_ACCOUNT" \
         --deployment-name "$AOAI_DEPLOYMENT_NAME" -o none 2>/dev/null; then
-      az cognitiveservices account deployment create -g "$RESOURCE_GROUP" -n "$AOAI_ACCOUNT" \
-        --deployment-name "$AOAI_DEPLOYMENT_NAME" --model-name "$AOAI_MODEL_NAME" \
-        --model-version "$AOAI_MODEL_VERSION" --model-format OpenAI \
-        --sku-name GlobalStandard --sku-capacity "$AOAI_CAPACITY" --only-show-errors -o none \
+      ctf_create_aoai_deployment \
         || die "Model deployment failed. Check model availability/quota: az cognitiveservices usage list -l $AOAI_LOCATION"
     fi
     log_ok "model deployment '$AOAI_DEPLOYMENT_NAME' ($AOAI_MODEL_NAME $AOAI_MODEL_VERSION, GlobalStandard x$AOAI_CAPACITY)"
