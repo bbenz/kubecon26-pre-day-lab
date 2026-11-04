@@ -19,6 +19,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)/.lab/leaderboard"
 RESOURCE_GROUP=""
 ACCOUNT=""
+SUBSCRIPTION=""
 REVOKE_ONLY=false
 YES=false
 
@@ -28,6 +29,8 @@ usage() {
 Options:
   -g, --resource-group NAME  default: from .lab/leaderboard/settings.env
   --account NAME             storage account (default: from .lab/leaderboard/settings.env)
+  --subscription ID          subscription of the leaderboard (default: from .lab/leaderboard/settings.env,
+                             else the Azure CLI default)
   --revoke-only              only invalidate the tokens; keep the leaderboard
   -y, --yes                  don't ask for confirmation
   -h, --help                 show this help
@@ -38,6 +41,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     -g|--resource-group) RESOURCE_GROUP=${2:?}; shift 2 ;;
     --account)           ACCOUNT=${2:?}; shift 2 ;;
+    --subscription)      SUBSCRIPTION=${2:?}; shift 2 ;;
     --revoke-only)       REVOKE_ONLY=true; shift ;;
     -y|--yes)            YES=true; shift ;;
     -h|--help)           usage; exit 0 ;;
@@ -47,12 +51,16 @@ done
 setting() { [ -f "$OUT_DIR/settings.env" ] && sed -n "s/^$1=//p" "$OUT_DIR/settings.env" | tr -d '\r' | head -n 1; }
 [ -n "$RESOURCE_GROUP" ] || RESOURCE_GROUP=$(setting LB_RESOURCE_GROUP)
 [ -n "$ACCOUNT" ] || ACCOUNT=$(setting LB_STORAGE_ACCOUNT)
+[ -n "$SUBSCRIPTION" ] || SUBSCRIPTION=$(setting LB_SUBSCRIPTION)
 if [ -z "$RESOURCE_GROUP" ] || [ -z "$ACCOUNT" ]; then
   echo "Pass --resource-group and --account (or run this where leaderboard/setup.sh ran)" >&2; exit 2
 fi
+# Act on the leaderboard's own subscription, whatever the Azure CLI default is.
+SUB_ARGS=()
+if [ -n "$SUBSCRIPTION" ]; then SUB_ARGS=(--subscription "$SUBSCRIPTION"); echo "Leaderboard subscription: $SUBSCRIPTION"; fi
 
 echo "Revoking every token issued for $ACCOUNT ..."
-if az storage account revoke-delegation-keys -n "$ACCOUNT" -g "$RESOURCE_GROUP" --only-show-errors -o none; then
+if az storage account revoke-delegation-keys -n "$ACCOUNT" -g "$RESOURCE_GROUP" ${SUB_ARGS[@]+"${SUB_ARGS[@]}"} --only-show-errors -o none; then
   echo "OK - tokens revoked: lab VMs can no longer record results."
 elif [ "$REVOKE_ONLY" = true ]; then
   echo "Could not revoke the tokens for $ACCOUNT" >&2; exit 1
@@ -64,18 +72,26 @@ if [ "$REVOKE_ONLY" = true ]; then
   exit 0
 fi
 
-if ! purpose=$(az group show -n "$RESOURCE_GROUP" --query tags.purpose -o tsv --only-show-errors 2>/dev/null | tr -d '\r'); then
+exists=$(az group exists -n "$RESOURCE_GROUP" ${SUB_ARGS[@]+"${SUB_ARGS[@]}"} --only-show-errors 2>/dev/null | tr -d '\r')
+case "$exists" in
+  true|false) ;;
+  *) echo "Could not check resource group $RESOURCE_GROUP (sign-in or subscription problem?) - nothing was deleted" >&2; exit 1 ;;
+esac
+if [ "$exists" = false ]; then
   echo "Resource group $RESOURCE_GROUP not found."
-elif [ "$purpose" != kubecon-ctf-leaderboard ]; then
-  echo "Resource group $RESOURCE_GROUP was not created by leaderboard/setup (tag purpose=$purpose) - not deleting it" >&2; exit 1
 else
+  purpose=$(az group show -n "$RESOURCE_GROUP" ${SUB_ARGS[@]+"${SUB_ARGS[@]}"} --query tags.purpose -o tsv --only-show-errors 2>/dev/null | tr -d '\r')
+  if [ "$purpose" != kubecon-ctf-leaderboard ]; then
+    echo "Resource group $RESOURCE_GROUP was not created by leaderboard/setup (tag purpose=$purpose) - not deleting it" >&2; exit 1
+  fi
   if [ "$YES" != true ]; then
     printf 'Delete resource group %s with storage account %s and every result? (yes/no) ' "$RESOURCE_GROUP" "$ACCOUNT"
     read -r answer
     case "$answer" in y|Y|yes|YES) ;; *) echo "Cancelled."; exit 0 ;; esac
   fi
   echo "Deleting resource group $RESOURCE_GROUP (a few minutes) ..."
-  az group delete -n "$RESOURCE_GROUP" --yes --only-show-errors || { echo "Could not delete resource group $RESOURCE_GROUP" >&2; exit 1; }
+  az group delete -n "$RESOURCE_GROUP" ${SUB_ARGS[@]+"${SUB_ARGS[@]}"} --yes --only-show-errors \
+    || { echo "Could not delete resource group $RESOURCE_GROUP" >&2; exit 1; }
   echo "OK - leaderboard deleted."
 fi
 rm -rf "$OUT_DIR/settings.env" "$OUT_DIR/submit-url.txt" "$OUT_DIR/skillable-lca-windows.ps1" \

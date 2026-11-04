@@ -87,6 +87,11 @@ container, issues the token and **tests it** (it must be able to record an entry
 writes `.lab/leaderboard/` (ignored by git): `settings.env`, `submit-url.txt` and the two Skillable life cycle actions
 with the token filled in. Re-running it is safe and issues a fresh token.
 
+`setup` creates the leaderboard in the Azure CLI's current subscription and records it in `settings.env`; `board`
+and `cleanup` then use that recorded subscription, whichever subscription is current later (override with
+`-Subscription` / `--subscription`). Running `setup` with a different current subscription creates a new
+leaderboard there and replaces the local files of the old one.
+
 ### 2. Register every lab with a Skillable life cycle action
 
 In the lab profile: **Life Cycle Actions → Add**
@@ -115,7 +120,8 @@ az role assignment create --role "Storage Blob Data Reader" --assignee <user@con
   --scope $(az storage account show -n <account> -g rg-kubecon-ctf-leaderboard --query id -o tsv)
 ```
 
-On a laptop that didn't run `setup`, pass `-StorageAccount`/`-Container` (`--account`/`--container`) to the board.
+On a laptop that didn't run `setup`, pass `-StorageAccount`/`-Container` (`--account`/`--container`) to the board,
+and `-Subscription` (`--subscription`) if that laptop's current Azure CLI subscription is in another tenant.
 
 ### 4. Rehearse
 
@@ -175,7 +181,9 @@ cycle action.
 ./leaderboard/cleanup.sh
 ```
 
-`cleanup` only deletes a resource group that `setup` created (tag `purpose=kubecon-ctf-leaderboard`).
+`cleanup` only deletes a resource group that `setup` created (tag `purpose=kubecon-ctf-leaderboard`), in the
+subscription recorded in `settings.env`. If it can't check the resource group (for example a sign-in problem), it
+stops without deleting anything, including the local files.
 
 ## Trying it outside Skillable
 

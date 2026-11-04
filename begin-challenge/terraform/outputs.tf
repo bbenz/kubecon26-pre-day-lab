@@ -19,7 +19,7 @@ output "challenges" {
 
 output "connect" {
   description = "Commands to point kubectl at the lab cluster."
-  value       = "az aks get-credentials -g ${module.platform.resource_group_name} -n ${module.platform.cluster_name} --overwrite-existing && kubelogin convert-kubeconfig -l azurecli --context ${module.platform.cluster_name}"
+  value       = "az aks get-credentials -g ${module.platform.resource_group_name} -n ${module.platform.cluster_name} --overwrite-existing && kubelogin convert-kubeconfig -l azurecli --tenant-id ${module.platform.tenant_id} --context ${module.platform.cluster_name}"
 }
 
 output "storefront_url" {

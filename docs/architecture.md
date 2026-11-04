@@ -49,7 +49,7 @@ Both states deploy the same platform; only the challenge layer differs:
 | Shared code | `shared/azure-cli-bash/lib/*.sh` | `shared/azure-cli-powershell/CtfLab.psm1` | `shared/terraform/modules/lab-platform`, `lab-challenge` |
 | AKS Automatic | `az aks create --sku automatic --enable-hosted-system --no-ssh-key --enable-app-routing --enable-gateway-api --enable-app-routing-istio --enable-azure-monitor-metrics --azure-monitor-workspace-resource-id <amw> --workspace-resource-id <law>` | same | `azapi_resource` `Microsoft.ContainerService/managedClusters@2026-05-01` with the equivalent body, plus the Managed Prometheus data collection resources (`monitoring.tf`, `monitoring-rules.tf`) |
 | Kubernetes objects | `kubectl apply -f` of rendered manifests | same | `alekc/kubectl` `kubectl_manifest` (server-side apply) per YAML document |
-| Kubernetes auth | `az aks get-credentials` + `kubelogin convert-kubeconfig -l azurecli` | same | kubectl provider `exec` → `kubelogin get-token --login azurecli` |
+| Kubernetes auth | `az aks get-credentials` + `kubelogin convert-kubeconfig -l azurecli --tenant-id <tenant>` | same | kubectl provider `exec` → `kubelogin get-token --login azurecli --tenant-id <tenant>` |
 | State | idempotent re-runs (create-if-missing) | same | Terraform state per folder |
 
 ### Deployment sequence

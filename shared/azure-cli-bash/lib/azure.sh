@@ -118,7 +118,9 @@ ctf_get_credentials() {
   log_step "kubectl credentials (context: $KUBE_CONTEXT)"
   az aks get-credentials -g "$RESOURCE_GROUP" -n "$CLUSTER_NAME" --context "$KUBE_CONTEXT" \
     --overwrite-existing --only-show-errors
-  kubelogin convert-kubeconfig -l azurecli --context "$KUBE_CONTEXT"
+  # Pin the context to this subscription's tenant: kubectl keeps working when
+  # the Azure CLI default later points at a subscription in another tenant.
+  kubelogin convert-kubeconfig -l azurecli --tenant-id "$TENANT_ID" --context "$KUBE_CONTEXT"
   log_info "Waiting for the Kubernetes RBAC role assignment to take effect (can take up to 5 minutes) ..."
   local i=0
   while [ "$i" -lt 40 ]; do

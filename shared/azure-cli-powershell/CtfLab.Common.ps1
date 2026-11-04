@@ -176,6 +176,7 @@ function Test-CtfPrerequisites {
     $azVersion = [version]((& az version -o json 2>$null | ConvertFrom-Json).'azure-cli')
     if ($azVersion -lt $script:MinAzVersion) { throw "Azure CLI $azVersion is too old; $($script:MinAzVersion) or later is required (az upgrade)" }
     $script:Ctf.SubscriptionId = Invoke-AzTsv account show --query id
+    $script:Ctf.TenantId = Invoke-AzTsv account show --query tenantId
     Write-CtfInfo "Azure CLI $azVersion, subscription $(Invoke-AzTsv account show --query name) ($($script:Ctf.SubscriptionId))"
     if (Test-AzCommand extension show --name aks-preview) {
         $script:Ctf.NoExtDir = (New-Item -ItemType Directory -Path (Join-Path ([IO.Path]::GetTempPath()) "ctf-noext-$PID") -Force).FullName

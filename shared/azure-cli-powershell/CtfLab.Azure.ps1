@@ -108,7 +108,9 @@ function Get-CtfCredentials {
     $c = $script:Ctf
     Write-CtfStep "kubectl credentials (context: $($c.KubeContext))"
     Invoke-AzCommand aks get-credentials -g $c.ResourceGroup -n $c.ClusterName --context $c.KubeContext --overwrite-existing | Out-Null
-    & kubelogin convert-kubeconfig -l azurecli --context $c.KubeContext
+    # Pin the context to this subscription's tenant: kubectl keeps working when
+    # the Azure CLI default later points at a subscription in another tenant.
+    & kubelogin convert-kubeconfig -l azurecli --tenant-id $c.TenantId --context $c.KubeContext
     if ($LASTEXITCODE -ne 0) { throw 'kubelogin convert-kubeconfig failed' }
     Write-CtfInfo 'Waiting for the Kubernetes RBAC role assignment to take effect (can take up to 5 minutes) ...'
     for ($i = 0; $i -lt 40; $i++) {

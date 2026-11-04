@@ -207,6 +207,7 @@ ctf_preflight() {
   azv=$(az version --query '"azure-cli"' -o tsv 2>/dev/null | tr -d '\r')
   ctf_version_ge "${azv:-0.0.0}" "$CTF_MIN_AZ_VERSION" || die "Azure CLI $azv is too old; $CTF_MIN_AZ_VERSION or later is required (az upgrade)"
   SUBSCRIPTION_ID=$(az_tsv account show --query id)
+  TENANT_ID=$(az_tsv account show --query tenantId)
   log_info "Azure CLI $azv, subscription $(az_tsv account show --query name) ($SUBSCRIPTION_ID)"
   if az extension show --name aks-preview >/dev/null 2>&1; then
     CTF_NOEXT_DIR=$(mktemp -d 2>/dev/null || mktemp -d -t ctfnoext)

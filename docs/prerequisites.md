@@ -5,8 +5,8 @@
 | Requirement | Why | Check |
 |---|---|---|
 | Subscription where you are **Owner** (or Contributor + User Access Administrator / Role Based Access Control Administrator) | The deployment creates role assignments (AKS RBAC Cluster Admin for you; roles for the C4/A4 managed identities). | `az role assignment list --assignee $(az ad signed-in-user show --query id -o tsv) --scope /subscriptions/<id> -o table` |
-| Resource providers registered: `Microsoft.ContainerService`, `Microsoft.Compute`, `Microsoft.Network`, `Microsoft.ManagedIdentity`, `Microsoft.PolicyInsights`, `Microsoft.CognitiveServices` (C4), `Microsoft.KeyVault` (A4), `Microsoft.Monitor`, `Microsoft.OperationalInsights`, `Microsoft.AlertsManagement`, `Microsoft.Dashboard` | AKS Automatic enables Azure Policy (deployment safeguards) and monitoring. | `az provider show -n Microsoft.PolicyInsights --query registrationState` / `az provider register -n <namespace>` |
-| A region where **AKS Automatic** is GA (see the [quickstart's list](https://learn.microsoft.com/azure/aks/automatic/quick-automatic-managed-network)) | Default: `westus3`. | |
+| Resource providers registered: `Microsoft.ContainerService`, `Microsoft.Compute`, `Microsoft.Network`, `Microsoft.ManagedIdentity`, `Microsoft.PolicyInsights`, `Microsoft.CognitiveServices` (C4), `Microsoft.KeyVault` (A4), `Microsoft.Monitor`, `Microsoft.Insights`, `Microsoft.OperationalInsights`, `Microsoft.AlertsManagement`, `Microsoft.Dashboard`, `Microsoft.Storage` (leaderboard) | AKS Automatic enables Azure Policy (deployment safeguards) and monitoring (Managed Prometheus data collection rules are `Microsoft.Insights` resources). | `az provider show -n Microsoft.PolicyInsights --query registrationState` / `az provider register -n <namespace>` |
+| A region where **AKS Automatic** is GA (see the [quickstart's list](https://learn.microsoft.com/azure/aks/automatic/quick-automatic-managed-network)) and that your organization's Azure Policy allows | Default: `westus3`. Check for location restrictions with `az policy assignment list --disable-scope-strict-match -o table`. | |
 | vCPU quota for general-purpose **D-family** VMs in that region (≈ 16–24 vCPUs for all ten challenges) | Node auto-provisioning creates workload nodes on demand. System components run on AKS-managed nodes and need no quota. | `az vm list-usage -l <region> -o table` |
 | **D-series sizes not restricted** for your subscription in the region (all zones) | Some subscriptions can't use certain series in certain zones; NAP skips restricted sizes, C3's fix must name allowed ones. | `az vm list-skus -l <region> --size Standard_D2s --query "[].{name:name, restrictions:restrictions[].reasonCode}" -o table` |
 | **C4 only:** model `gpt-6-luna` (version `2026-09-22`) available as **GlobalStandard** in `AOAI_LOCATION` (default = region), with ≥ 50K TPM quota | The store assistant's model deployment. Change with `AOAI_MODEL_NAME` / `AOAI_MODEL_VERSION` / `AOAI_CAPACITY`. | `az cognitiveservices model list -l <region> --query "[?model.name=='gpt-6-luna'].model.version"` and `az cognitiveservices usage list -l <region> -o table` |
@@ -54,8 +54,11 @@ give someone else access:
 az role assignment create --role "Azure Kubernetes Service RBAC Cluster Admin" \
   --assignee <user-or-object-id> --scope $(az group show -n <resource-group> --query id -o tsv)
 az aks get-credentials -g <resource-group> -n <cluster>
-kubelogin convert-kubeconfig -l azurecli --context <cluster>
+kubelogin convert-kubeconfig -l azurecli --tenant-id $(az account show --query tenantId -o tsv) --context <cluster>
 ```
+
+`--tenant-id` pins the context to the cluster's Microsoft Entra tenant, so `kubectl` keeps working when your Azure
+CLI's current subscription is in another tenant (the deploy scripts and Terraform's `connect` output do the same).
 
 ## Participant permissions (for later Skillable planning)
 

@@ -10,7 +10,7 @@
     Stop with Ctrl+C. See leaderboard/README.md.
 
 .EXAMPLE
-    ./leaderboard/board.ps1                     # storage account and container from .lab/leaderboard/settings.env
+    ./leaderboard/board.ps1                     # storage account, container and subscription from .lab/leaderboard/settings.env
 .EXAMPLE
     ./leaderboard/board.ps1 -StorageAccount ctflb1a2b3c4d -Container ctf -Challenges c1,c2,a2,c4 -Title 'KubeCon NA 2026 - AKS CTF' -Start '2026-11-10 09:00'
 #>
@@ -19,6 +19,9 @@
 param(
     [string]$StorageAccount,
     [string]$Container,
+    # Subscription of the storage account (default: the one recorded by setup, else the Azure CLI default).
+    # Needed when your Azure CLI default subscription is in another tenant.
+    [string]$Subscription,
     # Challenges shown and scored, in column order.
     [string[]]$Challenges = @('c1', 'c2', 'c3', 'c4', 'a1', 'a2', 'a3', 'a4', 'a5', 'a6'),
     [string]$Title = 'KubeCon AKS Capture the Flag',
@@ -44,8 +47,11 @@ function Get-Setting([string]$Key) {
 }
 if (-not $StorageAccount) { $StorageAccount = Get-Setting 'LB_STORAGE_ACCOUNT' }
 if (-not $Container) { $Container = Get-Setting 'LB_CONTAINER' }
+if (-not $Subscription) { $Subscription = Get-Setting 'LB_SUBSCRIPTION' }
 if (-not $StorageAccount -or -not $Container) { throw 'Pass -StorageAccount and -Container (or run leaderboard/setup.ps1 on this machine first)' }
 if (-not (Get-Command az -ErrorAction SilentlyContinue)) { throw 'The Azure CLI (az) is required' }
+# The sign-in is for the storage account's tenant even when the Azure CLI default subscription is elsewhere.
+$subscriptionArgs = if ($Subscription) { @('--subscription', $Subscription) } else { @() }
 $ids = @($Challenges | ForEach-Object { $_ -split '[,\s]+' } | Where-Object { $_ } | ForEach-Object { $_.ToLowerInvariant() })
 $bad = @($ids | Where-Object { $_ -notmatch '^[ac][0-9]$' })
 if ($bad) { throw "Unknown challenge ID(s) in -Challenges: $($bad -join ', ')" }
@@ -64,7 +70,7 @@ function Update-Board {
     $problem = $null
     $err = New-TemporaryFile
     try {
-        $raw = & az storage blob list --account-name $StorageAccount --container-name $Container --auth-mode login `
+        $raw = & az storage blob list --account-name $StorageAccount --container-name $Container --auth-mode login @subscriptionArgs `
             --prefix 'results/' --include m --num-results '*' --query '[].{n:name,t:properties.creationTime,m:metadata}' `
             -o json --only-show-errors 2>$err.FullName
         $text = ($raw | Out-String).Trim()

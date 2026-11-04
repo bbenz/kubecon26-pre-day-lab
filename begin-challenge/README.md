@@ -84,6 +84,13 @@ states (or Terraform and a script) at the same resource group. If several people
 give each environment its own resource group (for example `-g rg-<alias>-ctf-begin`); otherwise a second deployment
 reuses – and, in the begin state, resets – the first person's challenges.
 
+**Moving to another subscription.** The scripts deploy into the Azure CLI's current subscription
+(`az account set -s <subscription>` first). Terraform state belongs to the subscription it was created in: before
+deploying a Terraform folder somewhere else, `terraform destroy` the old environment (with its old `subscription_id`)
+or keep a separate state with `terraform workspace new <name>`. kubectl contexts are tied to their cluster's
+Microsoft Entra tenant, so contexts for clusters in different tenants keep working whichever subscription is your
+current one – but a new cluster with the same name replaces the old context.
+
 ### If a deployment stops with an error
 
 Every approach is safe to run again: the scripts reuse what already exists, and Terraform continues from its

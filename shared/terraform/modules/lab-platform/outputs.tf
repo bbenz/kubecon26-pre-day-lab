@@ -13,6 +13,11 @@ output "cluster_id" {
   value       = azapi_resource.aks.id
 }
 
+output "tenant_id" {
+  description = "Microsoft Entra tenant of the deployment (kubectl tokens are requested for this tenant)."
+  value       = data.azurerm_client_config.current.tenant_id
+}
+
 output "kubernetes_version" {
   description = "Kubernetes version the cluster runs."
   value       = azapi_resource.aks.output.kubernetes_version

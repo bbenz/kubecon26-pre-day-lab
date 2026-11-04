@@ -9,7 +9,7 @@
 # double-click a player to hide them, press U to show hidden players again.
 # Stop with Ctrl+C. See leaderboard/README.md.
 #
-#   ./leaderboard/board.sh            # storage account/container from .lab/leaderboard/settings.env
+#   ./leaderboard/board.sh            # storage account/container/subscription from .lab/leaderboard/settings.env
 #   ./leaderboard/board.sh --account ctflb1a2b3c4d --container ctf --challenges c1,c2,a2,c4 --start 2026-11-10T09:00
 # -----------------------------------------------------------------------------
 set -uo pipefail
@@ -20,6 +20,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SETTINGS="$REPO_ROOT/.lab/leaderboard/settings.env"
 ACCOUNT=""
 CONTAINER=""
+SUBSCRIPTION=""
 CHALLENGES="c1,c2,c3,c4,a1,a2,a3,a4,a5,a6"
 TITLE="KubeCon AKS Capture the Flag"
 REFRESH=10
@@ -35,6 +36,8 @@ usage() {
 Options:
   --account NAME        storage account (default: from .lab/leaderboard/settings.env)
   --container NAME      container (default: from .lab/leaderboard/settings.env)
+  --subscription ID     subscription of the storage account (default: from .lab/leaderboard/settings.env,
+                        else the Azure CLI default) - needed when your default is in another tenant
   --challenges LIST     challenges shown and scored, in column order (default: $CHALLENGES)
   --title TEXT          heading (default: $TITLE)
   --refresh SECONDS     refresh interval, 5-300 (default: $REFRESH)
@@ -51,6 +54,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --account)     ACCOUNT=${2:?}; shift 2 ;;
     --container)   CONTAINER=${2:?}; shift 2 ;;
+    --subscription) SUBSCRIPTION=${2:?}; shift 2 ;;
     --challenges)  CHALLENGES=${2:?}; shift 2 ;;
     --title)       TITLE=${2:?}; shift 2 ;;
     --refresh)     REFRESH=${2:?}; shift 2 ;;
@@ -67,10 +71,14 @@ done
 setting() { [ -f "$SETTINGS" ] && sed -n "s/^$1=//p" "$SETTINGS" | tr -d '\r' | head -n 1; }
 [ -n "$ACCOUNT" ] || ACCOUNT=$(setting LB_STORAGE_ACCOUNT)
 [ -n "$CONTAINER" ] || CONTAINER=$(setting LB_CONTAINER)
+[ -n "$SUBSCRIPTION" ] || SUBSCRIPTION=$(setting LB_SUBSCRIPTION)
 if [ -z "$ACCOUNT" ] || [ -z "$CONTAINER" ]; then
   echo "Pass --account and --container (or run leaderboard/setup.sh on this machine first)" >&2; exit 2
 fi
 command -v az >/dev/null 2>&1 || { echo "The Azure CLI (az) is required" >&2; exit 2; }
+# The sign-in is for the storage account's tenant even when the Azure CLI default subscription is elsewhere.
+SUB_ARGS=()
+[ -z "$SUBSCRIPTION" ] || SUB_ARGS=(--subscription "$SUBSCRIPTION")
 for n in "$REFRESH" "$MAX_ROWS"; do
   case "$n" in ''|*[!0-9]*) echo "--refresh and --max-rows must be numbers" >&2; exit 2 ;; esac
 done
@@ -98,6 +106,7 @@ update_board() {
   local raw err problem="" error_json=null
   err=$(mktemp)
   if ! raw=$(az storage blob list --account-name "$ACCOUNT" --container-name "$CONTAINER" --auth-mode login \
+      ${SUB_ARGS[@]+"${SUB_ARGS[@]}"} \
       --prefix results/ --include m --num-results '*' --query '[].{n:name,t:properties.creationTime,m:metadata}' \
       -o json --only-show-errors 2>"$err"); then
     problem=$(tr '\r\n' '  ' < "$err" | sed 's/  */ /g; s/^ //; s/ $//')
