@@ -73,16 +73,28 @@ ctf_ensure_monitor_workspaces() {
 }
 
 # Sets CTF_PRINCIPAL_ID / CTF_PRINCIPAL_TYPE for the signed-in user or service principal.
+# Object ID of the signed-in identity, from the oid claim of its own access token.
+# Needs no Microsoft Graph permission, which a lab service principal (Skillable's
+# cloud subscription identity, for example) often doesn't have.
+ctf_token_object_id() {
+  local payload
+  payload=$(az_tsv account get-access-token --query accessToken 2>/dev/null | cut -d. -f2 | tr '_-' '/+')
+  case $(( ${#payload} % 4 )) in 2) payload="$payload==" ;; 3) payload="$payload=" ;; esac
+  { printf '%s' "$payload" | base64 -d 2>/dev/null || printf '%s' "$payload" | base64 -D 2>/dev/null; } |
+    tr ',{}' '\n' | sed -n 's/^ *"oid" *: *"\([0-9a-fA-F-]*\)".*/\1/p' | head -n 1
+}
+
 ctf_signed_in_principal() {
-  local type app_id
+  local type
   type=$(az_tsv account show --query user.type)
-  if [ "$type" = "user" ]; then
-    CTF_PRINCIPAL_ID=$(az_tsv ad signed-in-user show --query id)
-    CTF_PRINCIPAL_TYPE=User
-  else
-    app_id=$(az_tsv account show --query user.name)
-    CTF_PRINCIPAL_ID=$(az_tsv ad sp show --id "$app_id" --query id)
-    CTF_PRINCIPAL_TYPE=ServicePrincipal
+  if [ "$type" = "user" ]; then CTF_PRINCIPAL_TYPE=User; else CTF_PRINCIPAL_TYPE=ServicePrincipal; fi
+  CTF_PRINCIPAL_ID=$(ctf_token_object_id)
+  if [ -z "$CTF_PRINCIPAL_ID" ]; then
+    if [ "$CTF_PRINCIPAL_TYPE" = User ]; then
+      CTF_PRINCIPAL_ID=$(az_tsv ad signed-in-user show --query id)
+    else
+      CTF_PRINCIPAL_ID=$(az_tsv ad sp show --id "$(az_tsv account show --query user.name)" --query id)
+    fi
   fi
   [ -n "$CTF_PRINCIPAL_ID" ] || die "Could not determine the object ID of the signed-in principal"
 }

@@ -37,6 +37,10 @@ all GA (Azure CLI ≥ 2.86).
 Azure Cloud Shell includes the Azure CLI, `kubectl`, PowerShell 7 and Terraform; run `az aks install-cli` if
 `kubelogin` is missing. `ingress2gateway` is not included – download the Linux release (see the C2 README).
 
+The Skillable lab VM image installs all of these, plus AKS desktop, Inspektor Gadget, the GitHub CLI, the
+`aks-agent` Azure CLI extension, and VS Code with GitHub Copilot and AKS-MCP:
+[skillable/vm-image/VM-IMAGE-RUNBOOK.md](../skillable/vm-image/VM-IMAGE-RUNBOOK.md).
+
 ### The `aks-preview` extension
 
 If the `aks-preview` Azure CLI extension is installed it replaces `az aks` commands with preview versions. The
@@ -60,7 +64,14 @@ kubelogin convert-kubeconfig -l azurecli --tenant-id $(az account show --query t
 `--tenant-id` pins the context to the cluster's Microsoft Entra tenant, so `kubectl` keeps working when your Azure
 CLI's current subscription is in another tenant (the deploy scripts and Terraform's `connect` output do the same).
 
-## Participant permissions (for later Skillable planning)
+The deploy scripts read the signed-in identity's object ID from its own access token, so a service principal
+without Microsoft Graph permissions (such as Skillable's cloud subscription identity) can deploy too.
+
+## Participant permissions
+
+What each challenge needs. In Skillable, the cloud portal user has Contributor on the resource group, and the
+prepare life cycle action adds AKS RBAC Cluster Admin and Monitoring Data Reader on the resource group, and Managed
+Identity Contributor on A4's identity ([skillable/lca/LCA-RUNBOOK.md](../skillable/lca/LCA-RUNBOOK.md#identities-and-roles)):
 
 | Challenge | Kubernetes | Azure |
 |---|---|---|

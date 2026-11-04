@@ -6,8 +6,8 @@ in its **begin state** (seeded fault) or its **end state** (solved) with three i
 **Terraform**, the **Azure CLI in bash**, and the **Azure CLI in PowerShell**.
 
 > This repository is for **evaluating the challenges** (feasibility, timing, participant experience) before the
-> final selection. It contains the solutions. A participant-facing version (Skillable lab, LCA/scoring scripts)
-> comes later.
+> final selection. It contains the solutions. The [Skillable deployment](skillable/README.md) (lab VM image and
+> life cycle actions) builds the participant environment from it.
 
 ## Repository layout
 
@@ -20,6 +20,7 @@ begin-challenge/          deploy the challenges WITH their faults + participant 
 challenge-end-state/      deploy the challenges SOLVED (same structure; README per challenge = what changed)
 scoring/                  verify.sh / verify.ps1 - checks each challenge against its success criteria
 leaderboard/              optional live leaderboard for the lab room (verify results -> projector)
+skillable/                Skillable lab VM image script + life cycle actions (prepare, readiness gate), runbooks
 shared/                   code shared by both states (bash library, PowerShell module, Terraform modules)
 tests/                    local smoke tests on kind (no Azure needed)
 docs/                     prerequisites, architecture, testing
@@ -86,6 +87,17 @@ backs the **A2** dashboards stays in the lab resource group. See [docs/architect
 
 The Kubernetes-only challenges (C1, A1, A2, A3, A5, A6) can be exercised on a local **kind** cluster with the same
 bash library, PowerShell module and Terraform module the Azure deployment uses – see [docs/testing.md](docs/testing.md).
+
+## Skillable deployment
+
+[skillable/](skillable/README.md) has everything to run the lab on Skillable, modeled on the LAB723 (Ignite 2026)
+artifacts: a **VM image setup script** with a paste-in bootstrap (Azure CLI with aks-agent, kubectl, kubelogin,
+Helm, GitHub CLI, AKS desktop, Inspektor Gadget, VS Code with Copilot and AKS-MCP, PowerShell 7, WSL, and this
+repository), and **life cycle actions**: a 250-line prepare LCA that deploys the begin state with
+`begin-challenge/azure-cli-powershell/deploy.ps1` as the cloud subscription's service principal, gives the attendee
+**Azure Kubernetes Service RBAC Cluster Admin**, and runs a readiness gate, and a readiness gate LCA that removes
+the service principal from the VM before the attendee gets it. Runbooks:
+[VM image](skillable/vm-image/VM-IMAGE-RUNBOOK.md), [LCAs](skillable/lca/LCA-RUNBOOK.md).
 
 ## Event leaderboard (optional)
 

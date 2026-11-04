@@ -70,13 +70,27 @@ function Install-CtfMonitorWorkspaces([switch]$MetricsOnly) {
     return $result
 }
 
+# Object ID of the signed-in identity, from the oid claim of its own access token.
+# Needs no Microsoft Graph permission, which a lab service principal (Skillable's
+# cloud subscription identity, for example) often doesn't have.
+function Get-CtfTokenObjectId {
+    $token = Invoke-AzTsv account get-access-token --query accessToken
+    $parts = "$token".Split('.')
+    if ($parts.Count -lt 2) { return '' }
+    $payload = $parts[1].Replace('-', '+').Replace('_', '/')
+    switch ($payload.Length % 4) { 2 { $payload += '==' } 3 { $payload += '=' } }
+    try { return [string]([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($payload)) | ConvertFrom-Json).oid }
+    catch { return '' }
+}
+
 function Get-CtfSignedInPrincipal {
-    $type = Invoke-AzTsv account show --query user.type
-    if ($type -eq 'user') {
-        return @{ Id = (Invoke-AzTsv ad signed-in-user show --query id); Type = 'User' }
+    $type = if ((Invoke-AzTsv account show --query user.type) -eq 'user') { 'User' } else { 'ServicePrincipal' }
+    $id = Get-CtfTokenObjectId
+    if (-not $id) {
+        $id = if ($type -eq 'User') { Invoke-AzTsv ad signed-in-user show --query id }
+              else { Invoke-AzTsv ad sp show --id (Invoke-AzTsv account show --query user.name) --query id }
     }
-    $appId = Invoke-AzTsv account show --query user.name
-    return @{ Id = (Invoke-AzTsv ad sp show --id $appId --query id); Type = 'ServicePrincipal' }
+    return @{ Id = $id; Type = $type }
 }
 
 function Set-CtfRoleAssignment([string]$PrincipalId, [string]$PrincipalType, [string]$Role, [string]$Scope) {
