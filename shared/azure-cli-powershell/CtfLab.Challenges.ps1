@@ -40,8 +40,29 @@ function Reset-CtfChallenge([string]$Id) {
         # Deleting the NodePool also removes any nodes it provisioned in an earlier run.
         Invoke-Kubectl delete nodepools.karpenter.sh -l kubecon.lab/challenge=c3 --ignore-not-found --wait=true --timeout=10m 2>$null | Out-Null
     }
-    Invoke-Kubectl delete namespace -l "kubecon.lab/challenge=$Id" --ignore-not-found --wait=true --timeout=10m | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "Timed out deleting the $Id namespace" }
+    for ($attempt = 1; ; $attempt++) {
+        $started = Get-Date
+        Invoke-Kubectl delete namespace -l "kubecon.lab/challenge=$Id" --ignore-not-found --wait=true --timeout=10m | Out-Null
+        if ($LASTEXITCODE -eq 0) { break }
+        # A fast failure is the API server or its authorization webhook, not the deletion timing out: try again.
+        if ($attempt -ge 3 -or ((Get-Date) - $started).TotalSeconds -gt 60) { throw "Could not delete the $Id namespace" }
+        Write-CtfWarn "kubectl delete failed (attempt $attempt of 3) - retrying in 15 seconds ..."
+        Start-Sleep -Seconds 15
+    }
+}
+
+# kubectl apply, retried: right after a cluster is created, or under load, the Azure RBAC authorization webhook can
+# time out (InternalError ... subjectaccessreviews ... Client.Timeout exceeded). apply is idempotent. $LASTEXITCODE
+# is the last attempt's.
+function Invoke-CtfApply {
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        Invoke-Kubectl apply @args
+        if ($LASTEXITCODE -eq 0) { return }
+        if ($attempt -lt 3) {
+            Write-CtfWarn "kubectl apply failed (attempt $attempt of 3) - retrying in 15 seconds ..."
+            Start-Sleep -Seconds 15
+        }
+    }
 }
 
 function Wait-CtfSetupJobs([string]$Namespace) {
@@ -64,17 +85,17 @@ function Install-CtfChallenge([string]$Id) {
     Write-CtfStep "Challenge $Id -> namespace $ns ($($c.State) state)"
     $rendered = Get-CtfRenderedChallenge $Id
     if ($c.Reset) { Reset-CtfChallenge $Id }
-    Invoke-Kubectl apply -f (Join-Path $rendered '00-namespace.yaml') | Out-Null
+    Invoke-CtfApply -f (Join-Path $rendered '00-namespace.yaml') | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Could not create namespace $ns" }
     # Phase 1: objects labelled kubecon.lab/phase=setup (for example seeding data
     # onto a disk) must finish before the rest of the challenge is applied.
     if (Select-String -Path (Join-Path $rendered '*.yaml') -Pattern 'kubecon.lab/phase: setup' -Quiet) {
-        Invoke-Kubectl apply -f $rendered -l kubecon.lab/phase=setup
+        Invoke-CtfApply -f $rendered -l kubecon.lab/phase=setup
         if ($LASTEXITCODE -ne 0) { throw "kubectl apply (setup phase) failed for $Id" }
         Wait-CtfSetupJobs $ns
     }
     # Phase 2: everything.
-    Invoke-Kubectl apply -f $rendered
+    Invoke-CtfApply -f $rendered
     if ($LASTEXITCODE -ne 0) { throw "kubectl apply failed for $Id" }
     $relative = [IO.Path]::GetRelativePath($c.RepoRoot, (Get-CtfChallengeDir $Id))
     Write-CtfOk "applied $relative/manifests"

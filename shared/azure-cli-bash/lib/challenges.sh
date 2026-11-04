@@ -37,14 +37,34 @@ ctf_render_challenge() {
 
 # Deletes a challenge's namespace and cluster-scoped objects so it can be re-created from scratch.
 ctf_reset_challenge() {
-  local id=$1
+  local id=$1 attempt=1 started
   log_info "Reset: deleting existing objects for $id (namespace $(ctf_namespace "$id"))"
   if [ "$id" = "c3" ]; then
     # Deleting the NodePool also removes any nodes it provisioned in an earlier run.
     k delete nodepools.karpenter.sh -l "kubecon.lab/challenge=c3" --ignore-not-found --wait=true --timeout=10m || true
   fi
-  k delete namespace -l "kubecon.lab/challenge=$id" --ignore-not-found --wait=true --timeout=10m \
-    || die "Timed out deleting the $id namespace"
+  while :; do
+    started=$SECONDS
+    k delete namespace -l "kubecon.lab/challenge=$id" --ignore-not-found --wait=true --timeout=10m && break
+    # A fast failure is the API server or its authorization webhook, not the deletion timing out: try again.
+    if [ "$attempt" -ge 3 ] || [ $((SECONDS - started)) -gt 60 ]; then die "Could not delete the $id namespace"; fi
+    log_warn "kubectl delete failed (attempt $attempt of 3) - retrying in 15 seconds ..."
+    attempt=$((attempt + 1))
+    sleep 15
+  done
+}
+
+# kubectl apply, retried: right after a cluster is created, or under load, the Azure RBAC authorization
+# webhook can time out (InternalError ... subjectaccessreviews ... Client.Timeout exceeded). apply is idempotent.
+ctf_kubectl_apply() {
+  local attempt=1
+  while :; do
+    k apply "$@" && return 0
+    [ "$attempt" -ge 3 ] && return 1
+    log_warn "kubectl apply failed (attempt $attempt of 3) - retrying in 15 seconds ..."
+    attempt=$((attempt + 1))
+    sleep 15
+  done
 }
 
 # Waits until every Job labelled kubecon.lab/phase=setup in <namespace> has succeeded.
@@ -73,15 +93,16 @@ ctf_apply_challenge() {
   log_step "Challenge $id -> namespace $ns ($LAB_STATE state)"
   ctf_render_challenge "$id"
   [ "$CTF_RESET" = true ] && ctf_reset_challenge "$id"
-  k apply -f "$(ctf_path "$CTF_RENDERED/00-namespace.yaml")" >/dev/null
+  ctf_kubectl_apply -f "$(ctf_path "$CTF_RENDERED/00-namespace.yaml")" >/dev/null || die "Could not create namespace $ns"
   # Phase 1: objects labelled kubecon.lab/phase=setup (for example seeding data
   # onto a disk) must finish before the rest of the challenge is applied.
   if grep -q 'kubecon.lab/phase: setup' "$CTF_RENDERED"/*.yaml; then
-    k apply -f "$(ctf_path "$CTF_RENDERED")" -l kubecon.lab/phase=setup
+    ctf_kubectl_apply -f "$(ctf_path "$CTF_RENDERED")" -l kubecon.lab/phase=setup \
+      || die "kubectl apply (setup phase) failed for $id"
     ctf_wait_setup_jobs "$ns"
   fi
   # Phase 2: everything.
-  k apply -f "$(ctf_path "$CTF_RENDERED")"
+  ctf_kubectl_apply -f "$(ctf_path "$CTF_RENDERED")" || die "kubectl apply failed for $id"
   log_ok "applied $(ctf_challenge_dir "$id" | sed "s|^$REPO_ROOT/||")/manifests"
   ctf_prune_challenge "$id" "$ns"
 }
