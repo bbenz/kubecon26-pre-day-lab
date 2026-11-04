@@ -47,8 +47,8 @@ ctf_reset_challenge() {
     started=$SECONDS
     k delete namespace -l "kubecon.lab/challenge=$id" --ignore-not-found --wait=true --timeout=10m && break
     # A fast failure is the API server or its authorization webhook, not the deletion timing out: try again.
-    if [ "$attempt" -ge 3 ] || [ $((SECONDS - started)) -gt 60 ]; then die "Could not delete the $id namespace"; fi
-    log_warn "kubectl delete failed (attempt $attempt of 3) - retrying in 15 seconds ..."
+    if [ "$attempt" -ge 5 ] || [ $((SECONDS - started)) -gt 60 ]; then die "Could not delete the $id namespace"; fi
+    log_warn "kubectl delete failed (attempt $attempt of 5) - retrying in 15 seconds ..."
     attempt=$((attempt + 1))
     sleep 15
   done
@@ -60,8 +60,8 @@ ctf_kubectl_apply() {
   local attempt=1
   while :; do
     k apply "$@" && return 0
-    [ "$attempt" -ge 3 ] && return 1
-    log_warn "kubectl apply failed (attempt $attempt of 3) - retrying in 15 seconds ..."
+    [ "$attempt" -ge 5 ] && return 1
+    log_warn "kubectl apply failed (attempt $attempt of 5) - retrying in 15 seconds ..."
     attempt=$((attempt + 1))
     sleep 15
   done

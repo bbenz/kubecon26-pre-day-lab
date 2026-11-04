@@ -132,6 +132,8 @@ policy, which changes a few familiar debugging habits:
 * `kubectl apply` prints `Warning: <name> had anti-affinity and topology spread constraints added ...` for most
   Deployments – that is the safeguards mutating policy, not an error.
 * Pods resolve DNS through **LocalDNS**, a cache on every node (`nameserver 169.254.10.11` in `/etc/resolv.conf`).
+* An occasional `Error from server (InternalError)` that mentions `guard` or `subjectaccessreviews` is the cluster's
+  Azure RBAC authorization check timing out: run the command again.
 
 ## Reset a challenge
 

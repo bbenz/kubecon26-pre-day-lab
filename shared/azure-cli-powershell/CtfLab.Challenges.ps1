@@ -45,8 +45,8 @@ function Reset-CtfChallenge([string]$Id) {
         Invoke-Kubectl delete namespace -l "kubecon.lab/challenge=$Id" --ignore-not-found --wait=true --timeout=10m | Out-Null
         if ($LASTEXITCODE -eq 0) { break }
         # A fast failure is the API server or its authorization webhook, not the deletion timing out: try again.
-        if ($attempt -ge 3 -or ((Get-Date) - $started).TotalSeconds -gt 60) { throw "Could not delete the $Id namespace" }
-        Write-CtfWarn "kubectl delete failed (attempt $attempt of 3) - retrying in 15 seconds ..."
+        if ($attempt -ge 5 -or ((Get-Date) - $started).TotalSeconds -gt 60) { throw "Could not delete the $Id namespace" }
+        Write-CtfWarn "kubectl delete failed (attempt $attempt of 5) - retrying in 15 seconds ..."
         Start-Sleep -Seconds 15
     }
 }
@@ -55,11 +55,11 @@ function Reset-CtfChallenge([string]$Id) {
 # time out (InternalError ... subjectaccessreviews ... Client.Timeout exceeded). apply is idempotent. $LASTEXITCODE
 # is the last attempt's.
 function Invoke-CtfApply {
-    for ($attempt = 1; $attempt -le 3; $attempt++) {
+    for ($attempt = 1; $attempt -le 5; $attempt++) {
         Invoke-Kubectl apply @args
         if ($LASTEXITCODE -eq 0) { return }
-        if ($attempt -lt 3) {
-            Write-CtfWarn "kubectl apply failed (attempt $attempt of 3) - retrying in 15 seconds ..."
+        if ($attempt -lt 5) {
+            Write-CtfWarn "kubectl apply failed (attempt $attempt of 5) - retrying in 15 seconds ..."
             Start-Sleep -Seconds 15
         }
     }
