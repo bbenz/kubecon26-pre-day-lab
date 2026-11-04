@@ -1136,6 +1136,8 @@ function Set-LabFolderAndStartup {
     if ($trusted -notcontains $safePath) { Invoke-Native { & $GitExe config --system --add safe.directory $safePath } | Out-Null }
     # No deployment state in the image
     Remove-Item -LiteralPath (Join-Path $LabRoot '.lab') -Recurse -Force -ErrorAction SilentlyContinue
+    # An earlier version of this lab used an attendee folder instead of the repository: an image built then has it.
+    Remove-Item -LiteralPath 'C:\lab-resources' -Recurse -Force -ErrorAction SilentlyContinue
     $Versions['labRepository'] = "$RepoRef at $((Invoke-LabGit @('-C', $LabRoot, 'rev-parse', '--short', 'HEAD')).Text)"
 
     # VS Code opens the lab folder at sign-in, and from the Start menu, because the image's VS Code doesn't restore

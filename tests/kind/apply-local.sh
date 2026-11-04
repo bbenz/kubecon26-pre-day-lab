@@ -24,7 +24,7 @@ STATE="${1:?usage: apply-local.sh begin|end [challenge ids...]}"
 shift
 case "$STATE" in
   begin) LAB_STATE_DIR="${CTF_STATE_DIR:-$REPO_ROOT/begin-challenge}" ;;
-  end)   LAB_STATE_DIR="${CTF_STATE_DIR:?set CTF_STATE_DIR to the folder with the end state's challenges}" ;;
+  end)   LAB_STATE_DIR="${CTF_STATE_DIR:?set CTF_STATE_DIR to the end state folder with the challenges}" ;;
   *)     echo "state must be begin or end" >&2; exit 2 ;;
 esac
 LAB_STATE="$STATE"
