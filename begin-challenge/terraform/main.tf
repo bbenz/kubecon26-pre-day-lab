@@ -34,7 +34,7 @@ module "platform" {
   resource_group_name  = var.resource_group_name
   cluster_name         = local.cluster_name
   challenges           = toset(local.selected)
-  aoai_location        = coalesce(var.aoai_location, var.location)
+  aoai_location        = var.aoai_location
   aoai_model_name      = var.aoai_model_name
   aoai_model_version   = var.aoai_model_version
   aoai_deployment_name = var.aoai_deployment_name

@@ -18,6 +18,10 @@ CTF_AKS_ADMIN_ROLE="Azure Kubernetes Service RBAC Cluster Admin"
 CTF_SECRET_NAME="lab-config"
 CTF_SECRET_VALUE="kubecon-ctf-a4: identity without secrets works"
 CTF_MIN_AZ_VERSION="2.86.0"
+# C4's Foundry account goes to the cluster's region when that region offers the model as Global Standard, and
+# otherwise to the first of these that does: westus3, where the lab was tested, then eastus2 and swedencentral,
+# which offer the most models. Some regions offer no OpenAI models at all (westcentralus, for one).
+CTF_AOAI_FALLBACK_LOCATIONS="westus3 eastus2 swedencentral"
 
 if [ -t 1 ]; then
   _C_BLUE=$'\033[1;34m'; _C_GREEN=$'\033[32m'; _C_YELLOW=$'\033[33m'; _C_RED=$'\033[31m'; _C_RESET=$'\033[0m'
@@ -126,7 +130,9 @@ Options (environment variable in brackets):
 
 C4 model settings (environment variables only):
   AOAI_MODEL_NAME (gpt-6-luna)  AOAI_MODEL_VERSION (2026-09-22)  AOAI_CAPACITY (50 = 50K TPM)
-  AOAI_DEPLOYMENT_NAME (store-assistant)  AOAI_LOCATION (same as LOCATION)
+  AOAI_DEPLOYMENT_NAME (store-assistant)
+  AOAI_LOCATION (the region if it offers the model; otherwise the first of
+                 ${CTF_AOAI_FALLBACK_LOCATIONS// /, } that does)
 EOF
 }
 
@@ -222,7 +228,8 @@ ctf_compute_names() {
     LOCATION="${LOCATION:-westus3}"
   fi
   LOCATION=$(ctf_lower "$LOCATION" | tr -d ' ')
-  AOAI_LOCATION=$(ctf_lower "${AOAI_LOCATION:-$LOCATION}" | tr -d ' ')
+  # Empty: chosen when the Foundry account is created (ctf_resolve_aoai_location).
+  AOAI_LOCATION=$(ctf_lower "${AOAI_LOCATION:-}" | tr -d ' ')
   CTF_SUFFIX=$(printf '%s' "${SUBSCRIPTION_ID}/${RESOURCE_GROUP}" | ctf_sha1 | cut -c1-6)
   AOAI_ACCOUNT="aoai-ctf-${CTF_SUFFIX}"
   KEY_VAULT_NAME="kv-ctf-${CTF_SUFFIX}"

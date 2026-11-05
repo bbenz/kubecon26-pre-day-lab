@@ -28,8 +28,9 @@ variable "challenges" {
 }
 
 variable "aoai_location" {
-  description = "Region for the Microsoft Foundry (Azure OpenAI) account used by C4."
+  description = "Region for the Microsoft Foundry (Azure OpenAI) account used by C4. Null: location, if it offers the model as Global Standard; otherwise the first of westus3, eastus2, and swedencentral that does."
   type        = string
+  default     = null
 }
 
 variable "aoai_model_name" {

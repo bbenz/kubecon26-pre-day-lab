@@ -57,7 +57,8 @@ for A4 its Azure-side settings in `azure.env`.
 4. kubectl credentials; wait until `kubectl auth can-i '*' '*'` succeeds.
 5. Challenge-specific Azure services: application routing add-on with managed NGINX and Gateway API (C2; enabled on
    an existing cluster if missing), Managed Prometheus (A2; enabled on an existing cluster if missing), Foundry +
-   identity (C4), Key Vault + identity (A4).
+   identity (C4; the Foundry account goes to the cluster's region when it offers the model, otherwise to the first
+   of westus3, eastus2, and swedencentral that does), Key Vault + identity (A4).
 6. For each selected challenge: render placeholders → (begin state: delete the challenge's namespace/NodePool) →
    namespace → **setup phase** (objects labelled `kubecon.lab/phase: setup`, e.g. A6's disk and seed Job, waited
    for) → everything else. Within a challenge, objects that pods depend on (Services, ConfigMaps, policies, ...)

@@ -4,10 +4,34 @@
 # selected. Mirrors ctf_ensure_c4_azure in shared/azure-cli-bash/lib/azure.sh.
 # -----------------------------------------------------------------------------
 
+locals {
+  # The Foundry account goes to the cluster's region when that region offers the model as Global Standard, and
+  # otherwise to the first of these that does: westus3, where the lab was tested, then eastus2 and swedencentral,
+  # which offer the most models. Some regions offer no OpenAI models at all (westcentralus, for one).
+  # aoai_location overrides it.
+  aoai_fallback_locations = ["westus3", "eastus2", "swedencentral"]
+  aoai_candidates         = local.enable_c4 && var.aoai_location == null ? distinct(concat([lower(replace(var.location, " ", ""))], local.aoai_fallback_locations)) : []
+}
+
+# The subscription's model catalog for each candidate region: the Global Standard SKU of the model, if offered.
+data "azapi_resource_list" "aoai_models" {
+  for_each  = toset(local.aoai_candidates)
+  type      = "Microsoft.CognitiveServices/locations/models@2024-10-01"
+  parent_id = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/providers/Microsoft.CognitiveServices/locations/${each.key}"
+  response_export_values = {
+    skus = "value[?kind=='AIServices' && model.format=='OpenAI' && model.name=='${var.aoai_model_name}' && model.version=='${var.aoai_model_version}'].model.skus[].name"
+  }
+}
+
+locals {
+  aoai_offering = [for l in local.aoai_candidates : l if try(contains(data.azapi_resource_list.aoai_models[l].output.skus, "GlobalStandard"), false)]
+  aoai_location = var.aoai_location != null ? var.aoai_location : try(local.aoai_offering[0], var.location)
+}
+
 resource "azurerm_cognitive_account" "foundry" {
   count                 = local.enable_c4 ? 1 : 0
   name                  = local.aoai_account
-  location              = var.aoai_location
+  location              = local.aoai_location
   resource_group_name   = azurerm_resource_group.lab.name
   kind                  = "AIServices"
   sku_name              = "S0"
@@ -15,6 +39,13 @@ resource "azurerm_cognitive_account" "foundry" {
   # Keys off: the app must authenticate with Microsoft Entra ID (workload identity).
   local_auth_enabled = false
   tags               = local.tags
+
+  lifecycle {
+    precondition {
+      condition     = var.aoai_location != null || length(local.aoai_offering) > 0
+      error_message = "None of ${join(", ", local.aoai_candidates)} offers ${var.aoai_model_name} ${var.aoai_model_version} as Global Standard to this subscription. Set aoai_location to a region that does, choose another model with aoai_model_name and aoai_model_version, or leave c4 out."
+    }
+  }
 }
 
 resource "azurerm_cognitive_deployment" "store_assistant" {

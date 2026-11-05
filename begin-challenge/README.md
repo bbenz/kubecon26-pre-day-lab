@@ -73,7 +73,7 @@ Terraform also needs `kubelogin` on `PATH` (it authenticates the kubectl provide
 | Region | `-l` / `LOCATION` | `-Location` | `location` | the resource group's region if it exists (scripts), otherwise `westus3` |
 | Resource group | `-g` / `RESOURCE_GROUP` | `-ResourceGroup` | `resource_group_name` | `rg-kubecon-ctf-begin-bash` / `-pwsh` / `-tf` |
 | Cluster (= kubectl context) | `-n` / `CLUSTER_NAME` | `-ClusterName` | `cluster_name` | `aks-` + resource group without `rg-` |
-| C4 model | `AOAI_MODEL_NAME`, `AOAI_MODEL_VERSION`, `AOAI_CAPACITY`, `AOAI_DEPLOYMENT_NAME`, `AOAI_LOCATION` | `-ModelName` … | `aoai_*` | `gpt-6-luna` `2026-09-22`, 50K TPM, deployment `store-assistant` |
+| C4 model | `AOAI_MODEL_NAME`, `AOAI_MODEL_VERSION`, `AOAI_CAPACITY`, `AOAI_DEPLOYMENT_NAME`, `AOAI_LOCATION` | `-ModelName` … | `aoai_*` | `gpt-6-luna` `2026-09-22`, 50K TPM, deployment `store-assistant`; the Foundry account in the region, or in the first of `westus3`, `eastus2`, `swedencentral` that offers the model when the region doesn't |
 | Re-create challenges | `--reset` (default) / `--no-reset` | default / `-NoReset` | n/a | reset |
 | Only (re)apply challenges | `--skip-infra` | `-SkipInfra` | n/a | off |
 
@@ -100,6 +100,13 @@ fixed by simply re-running the same command. If you deployed only part of the ch
 `Could not assign '<role>' ... (RequestDisallowedByPolicy)` or `(AuthorizationFailed)` isn't transient: an Azure
 Policy in your subscription denies role assignments (the message names the policy assignment), or your account may
 not create them. See the first row of [the prerequisites](../docs/prerequisites.md#azure).
+
+`SpecialFeatureOrQuotaIdRequired` (`The current subscription does not have access to this model`) at C4 isn't
+transient either: the Foundry account's region doesn't offer the model, or your subscription can't use it there.
+Without `AOAI_LOCATION` (`-AoaiLocation`, `aoai_location`), the deployments create the account in a region that
+offers the model, and a re-run moves an account that an earlier run left in the wrong region (deleting and purging
+it, which needs subscription-level access). If you set it, choose a region where
+`az cognitiveservices model list -l <region>` lists the model, or leave `c4` out.
 
 ## After deployment
 

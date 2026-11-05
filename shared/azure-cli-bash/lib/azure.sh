@@ -285,36 +285,125 @@ ctf_aoai_settled() {
   [ "$(az_tsv cognitiveservices account show -g "$RESOURCE_GROUP" -n "$AOAI_ACCOUNT" --query properties.provisioningState)" = Succeeded ]
 }
 
-# Retries while the account is busy with another operation (RequestConflict); other errors fail at once.
+# Prints yes when the subscription's model catalog for region $1 has C4's model and version as Global Standard, no
+# when it doesn't, and unknown when the catalog can't be read.
+ctf_model_offered() {
+  local skus
+  if ! skus=$(az cognitiveservices model list -l "$1" \
+      --query "[?kind=='AIServices' && model.format=='OpenAI' && model.name=='$AOAI_MODEL_NAME' && model.version=='$AOAI_MODEL_VERSION'].model.skus[].name" \
+      --only-show-errors -o tsv 2>/dev/null); then
+    echo unknown
+    return 0
+  fi
+  case " $(printf '%s' "$skus" | tr '\r\n\t' '   ') " in
+    *" GlobalStandard "*) echo yes ;;
+    *) echo no ;;
+  esac
+}
+
+# The region for C4's Foundry account, in AOAI_LOCATION: AOAI_LOCATION when it's set; otherwise the cluster's region
+# when it offers the model, or the first fallback region that does.
+ctf_resolve_aoai_location() {
+  [ -n "$AOAI_LOCATION" ] && return 0
+  local loc offered cluster_offered=unknown tried=""
+  for loc in "$LOCATION" $CTF_AOAI_FALLBACK_LOCATIONS; do
+    case " $tried " in *" $loc "*) continue ;; esac
+    tried="${tried:+$tried, }$loc"
+    offered=$(ctf_model_offered "$loc")
+    if [ "$loc" = "$LOCATION" ]; then cluster_offered=$offered; fi
+    if [ "$offered" = yes ]; then
+      if [ "$loc" != "$LOCATION" ]; then
+        if [ "$cluster_offered" = unknown ]; then
+          log_info "Couldn't read the model catalog for $LOCATION: the Foundry account goes to $loc"
+        else
+          log_info "$LOCATION doesn't offer $AOAI_MODEL_NAME $AOAI_MODEL_VERSION as Global Standard: the Foundry account goes to $loc"
+        fi
+      fi
+      AOAI_LOCATION=$loc
+      return 0
+    fi
+  done
+  if [ "$cluster_offered" = unknown ]; then
+    log_warn "Couldn't read the model catalog for $LOCATION: the Foundry account goes there"
+    AOAI_LOCATION=$LOCATION
+    return 0
+  fi
+  die "None of $tried offers $AOAI_MODEL_NAME $AOAI_MODEL_VERSION as Global Standard to this subscription. Set AOAI_LOCATION to a region that does, choose another model with AOAI_MODEL_NAME and AOAI_MODEL_VERSION, or leave c4 out. To check a region: az cognitiveservices model list -l <region> --query \"[?model.name=='$AOAI_MODEL_NAME'].model.version\" -o tsv"
+}
+
+# Retries while the account is busy with another operation (RequestConflict); other errors fail at once. The last
+# error is in CTF_AOAI_ERROR.
 ctf_create_aoai_deployment() {
-  local attempt=1 err
+  local attempt=1
+  CTF_AOAI_ERROR=""
   while :; do
-    if err=$(az cognitiveservices account deployment create -g "$RESOURCE_GROUP" -n "$AOAI_ACCOUNT" \
+    if CTF_AOAI_ERROR=$(az cognitiveservices account deployment create -g "$RESOURCE_GROUP" -n "$AOAI_ACCOUNT" \
         --deployment-name "$AOAI_DEPLOYMENT_NAME" --model-name "$AOAI_MODEL_NAME" \
         --model-version "$AOAI_MODEL_VERSION" --model-format OpenAI \
         --sku-name GlobalStandard --sku-capacity "$AOAI_CAPACITY" --only-show-errors -o none 2>&1); then
       return 0
     fi
-    case "$err" in
+    case "$CTF_AOAI_ERROR" in
       *RequestConflict*|*"Another operation"*) ;;
-      *) printf '%s\n' "$err" >&2; return 1 ;;
+      *) printf '%s\n' "$CTF_AOAI_ERROR" >&2; return 1 ;;
     esac
-    if [ "$attempt" -ge 6 ]; then printf '%s\n' "$err" >&2; return 1; fi
+    if [ "$attempt" -ge 6 ]; then printf '%s\n' "$CTF_AOAI_ERROR" >&2; return 1; fi
     log_info "The Foundry account is busy (attempt $attempt of 6) - retrying in 20 seconds ..."
     attempt=$((attempt + 1))
     sleep 20
   done
 }
 
+# Fails when this identity can't purge deleted Foundry accounts in region $1, which needs subscription-level access
+# (a resource group's Owner, as in a manual Skillable run, doesn't have it): a purge of a name that doesn't exist
+# fails with AuthorizationFailed then, and otherwise does nothing.
+ctf_can_purge_aoai() {
+  local out
+  out=$(az cognitiveservices account purge -g "$RESOURCE_GROUP" -n "ctf-purge-probe-$RANDOM$RANDOM" -l "$1" \
+    --only-show-errors 2>&1 || true)
+  case "$out" in *AuthorizationFailed*) return 1 ;; esac
+  return 0
+}
+
 ctf_ensure_c4_azure() {
   ctf_selected c4 || return 0
   log_step "C4: Microsoft Foundry model deployment and ai-service identity"
-  if ! az cognitiveservices account show -g "$RESOURCE_GROUP" -n "$AOAI_ACCOUNT" -o none 2>/dev/null; then
+  local account_location
+  account_location=$(az_tsv cognitiveservices account show -g "$RESOURCE_GROUP" -n "$AOAI_ACCOUNT" --query location 2>/dev/null || true)
+  if [ -n "$account_location" ] && [ "$CTF_SKIP_INFRA" != true ] \
+      && ! az cognitiveservices account deployment show -g "$RESOURCE_GROUP" -n "$AOAI_ACCOUNT" \
+        --deployment-name "$AOAI_DEPLOYMENT_NAME" -o none 2>/dev/null \
+      && [ "$(ctf_model_offered "$account_location")" = no ]; then
+    # An account without the model deployment, in a region that doesn't offer the model (as a run before the
+    # region check left it): delete it, so that it can be created again where the model is.
+    ctf_resolve_aoai_location
+    if [ "$AOAI_LOCATION" != "$account_location" ]; then
+      # The name must be free again: delete, then purge. Without the access to purge, leave the account as it is,
+      # rather than delete it and leave its name taken for 48 hours.
+      ctf_can_purge_aoai "$account_location" \
+        || die "Foundry account $AOAI_ACCOUNT is in $account_location, which doesn't offer $AOAI_MODEL_NAME $AOAI_MODEL_VERSION. To create it in $AOAI_LOCATION, it must be deleted and purged, and purging needs subscription-level access, which this identity doesn't have. With an identity that has it (Owner or Contributor of the subscription), run: az cognitiveservices account delete -g $RESOURCE_GROUP -n $AOAI_ACCOUNT; az cognitiveservices account purge -g $RESOURCE_GROUP -n $AOAI_ACCOUNT -l $account_location. Then run this again."
+      log_info "Foundry account $AOAI_ACCOUNT is in $account_location, which doesn't offer $AOAI_MODEL_NAME: re-creating it in $AOAI_LOCATION ..."
+      az cognitiveservices account delete -g "$RESOURCE_GROUP" -n "$AOAI_ACCOUNT" --only-show-errors -o none
+      az cognitiveservices account purge -g "$RESOURCE_GROUP" -n "$AOAI_ACCOUNT" -l "$account_location" --only-show-errors -o none
+      account_location=""
+    fi
+  fi
+  if [ -z "$account_location" ]; then
     [ "$CTF_SKIP_INFRA" = true ] && die "Foundry account $AOAI_ACCOUNT not found (remove --skip-infra)"
+    ctf_resolve_aoai_location
+    account_location=$AOAI_LOCATION
     ctf_purge_deleted_aoai
-    az cognitiveservices account create -g "$RESOURCE_GROUP" -n "$AOAI_ACCOUNT" -l "$AOAI_LOCATION" \
-      --kind AIServices --sku S0 --custom-domain "$AOAI_ACCOUNT" --yes --only-show-errors -o none
-    log_ok "created Foundry account $AOAI_ACCOUNT ($AOAI_LOCATION)"
+    local err
+    if ! err=$(az cognitiveservices account create -g "$RESOURCE_GROUP" -n "$AOAI_ACCOUNT" -l "$account_location" \
+        --kind AIServices --sku S0 --custom-domain "$AOAI_ACCOUNT" --yes --only-show-errors -o none 2>&1); then
+      printf '%s\n' "$err" >&2
+      case "$err" in
+        *CustomDomainInUse*)
+          die "The name $AOAI_ACCOUNT is probably held by a deleted Foundry account (deleted in the last 48 hours), which this identity can't see or purge: that needs subscription-level access. With an identity that has it, run: az cognitiveservices account list-deleted -o table; az cognitiveservices account purge -g $RESOURCE_GROUP -n $AOAI_ACCOUNT -l <its location>. Then run this again." ;;
+      esac
+      die "Creating the Foundry account $AOAI_ACCOUNT failed: the error is above."
+    fi
+    log_ok "created Foundry account $AOAI_ACCOUNT ($account_location)"
   fi
   AOAI_ID=$(az_tsv cognitiveservices account show -g "$RESOURCE_GROUP" -n "$AOAI_ACCOUNT" --query id)
   AZURE_OPENAI_ENDPOINT="https://${AOAI_ACCOUNT}.openai.azure.com/"
@@ -327,8 +416,13 @@ ctf_ensure_c4_azure() {
     retry 30 10 ctf_aoai_settled || log_warn "Foundry account $AOAI_ACCOUNT is still updating after 5 minutes"
     if ! az cognitiveservices account deployment show -g "$RESOURCE_GROUP" -n "$AOAI_ACCOUNT" \
         --deployment-name "$AOAI_DEPLOYMENT_NAME" -o none 2>/dev/null; then
-      ctf_create_aoai_deployment \
-        || die "Model deployment failed. Check model availability/quota: az cognitiveservices usage list -l $AOAI_LOCATION"
+      if ! ctf_create_aoai_deployment; then
+        case "$CTF_AOAI_ERROR" in
+          *SpecialFeatureOrQuotaIdRequired*|*InsufficientQuota*|*DeploymentModelNotSupported*)
+            die "This subscription can't deploy $AOAI_MODEL_NAME $AOAI_MODEL_VERSION as Global Standard in $account_location: the region doesn't offer it, or there's no quota (az cognitiveservices usage list -l $account_location -o table). Set AOAI_LOCATION to another region, choose another model with AOAI_MODEL_NAME and AOAI_MODEL_VERSION, or leave c4 out." ;;
+        esac
+        die "The model deployment failed: the error is above."
+      fi
     fi
     log_ok "model deployment '$AOAI_DEPLOYMENT_NAME' ($AOAI_MODEL_NAME $AOAI_MODEL_VERSION, GlobalStandard x$AOAI_CAPACITY)"
   fi

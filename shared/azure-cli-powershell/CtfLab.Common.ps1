@@ -12,6 +12,10 @@ $script:AksAdminRole = 'Azure Kubernetes Service RBAC Cluster Admin'
 $script:SecretName = 'lab-config'
 $script:SecretValue = 'kubecon-ctf-a4: identity without secrets works'
 $script:MinAzVersion = [version]'2.86.0'
+# C4's Foundry account goes to the cluster's region when that region offers the model as Global Standard, and
+# otherwise to the first of these that does: westus3, where the lab was tested, then eastus2 and swedencentral,
+# which offer the most models. Some regions offer no OpenAI models at all (westcentralus, for one).
+$script:AoaiFallbackLocations = @('westus3', 'eastus2', 'swedencentral')
 
 function Write-CtfStep([string]$Message) { Write-Host ''; Write-Host "==> $Message" -ForegroundColor Cyan }
 function Write-CtfInfo([string]$Message) { Write-Host "    $Message" }
@@ -131,6 +135,7 @@ function Initialize-CtfLab {
         [string]$ModelVersion = '2026-09-22',
         [string]$DeploymentName = 'store-assistant',
         [int]$ModelCapacity = 50,
+        # Empty: chosen when the Foundry account is created (Resolve-CtfAoaiLocation).
         [string]$AoaiLocation,
         # The folder with the state's challenges/<id>-*/manifests. Default: begin-challenge in the repository for the
         # begin state; another state (in another repository, for example) passes its own folder.
@@ -196,7 +201,6 @@ function Test-CtfPrerequisites {
         $groupLocation = Invoke-AzTsv group show -n $script:Ctf.ResourceGroup --query location
         $script:Ctf.Location = if ($groupLocation) { $groupLocation.ToLowerInvariant() } else { 'westus3' }
     }
-    if (-not $script:Ctf.AoaiLocation) { $script:Ctf.AoaiLocation = $script:Ctf.Location }
     # Deterministic, globally unique names (same algorithm as the bash and Terraform deployments).
     $suffix = Get-CtfSha1Prefix "$($script:Ctf.SubscriptionId)/$($script:Ctf.ResourceGroup)"
     $script:Ctf.Suffix = $suffix

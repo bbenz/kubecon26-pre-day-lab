@@ -33,7 +33,7 @@ variable "cluster_name" {
 }
 
 variable "aoai_location" {
-  description = "Region for the C4 Microsoft Foundry account. Default: same as location."
+  description = "Region for the C4 Microsoft Foundry account. Default: location, if it offers the model as Global Standard; otherwise the first of westus3, eastus2, and swedencentral that does."
   type        = string
   default     = null
 }

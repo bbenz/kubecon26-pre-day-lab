@@ -267,20 +267,100 @@ function Invoke-CtfAzRest([string]$Method, [string]$Url, [hashtable]$Body, [int]
     finally { Remove-Item $file.FullName -ErrorAction SilentlyContinue }
 }
 
+# $true when the subscription's model catalog for the region has C4's model and version as Global Standard, $false
+# when it doesn't, and $null when the catalog can't be read.
+function Test-CtfModelOffered([string]$Location) {
+    $c = $script:Ctf
+    $query = "[?kind=='AIServices' && model.format=='OpenAI' && model.name=='$($c.ModelName)' && model.version=='$($c.ModelVersion)'].model.skus[].name"
+    $skus = & az cognitiveservices model list -l $Location --query $query --only-show-errors -o tsv 2>$null
+    if ($LASTEXITCODE -ne 0) { return $null }
+    return (@($skus | ForEach-Object { "$_".Trim() }) -contains 'GlobalStandard')
+}
+
+# The region for C4's Foundry account: -AoaiLocation when it's set; otherwise the cluster's region when it offers
+# the model, or the first fallback region that does.
+function Resolve-CtfAoaiLocation {
+    $c = $script:Ctf
+    if ($c.AoaiLocation) { return $c.AoaiLocation }
+    $candidates = @(@($c.Location) + $script:AoaiFallbackLocations | Select-Object -Unique)
+    $clusterOffered = $null
+    foreach ($location in $candidates) {
+        $offered = Test-CtfModelOffered $location
+        if ($location -eq $c.Location) { $clusterOffered = $offered }
+        if ($offered) {
+            if ($location -ne $c.Location) {
+                $why = if ($null -eq $clusterOffered) { "Couldn't read the model catalog for $($c.Location)" } else { "$($c.Location) doesn't offer $($c.ModelName) $($c.ModelVersion) as Global Standard" }
+                Write-CtfInfo "${why}: the Foundry account goes to $location"
+            }
+            $c.AoaiLocation = $location
+            return $location
+        }
+    }
+    if ($null -eq $clusterOffered) {
+        Write-CtfWarn "Couldn't read the model catalog for $($c.Location): the Foundry account goes there"
+        $c.AoaiLocation = $c.Location
+        return $c.Location
+    }
+    throw ("None of $($candidates -join ', ') offers $($c.ModelName) $($c.ModelVersion) as Global Standard to this subscription. " +
+        'Set -AoaiLocation (AOAI_LOCATION) to a region that does, choose another model with -ModelName and -ModelVersion, or leave c4 out. ' +
+        "To check a region: az cognitiveservices model list -l <region> --query `"[?model.name=='$($c.ModelName)'].model.version`" -o tsv")
+}
+
+# $false when this identity can't purge deleted Foundry accounts in the region, which needs subscription-level
+# access (a resource group's Owner, as in a manual Skillable run, doesn't have it): a purge of a name that doesn't
+# exist fails with AuthorizationFailed then, and otherwise does nothing.
+function Test-CtfCanPurgeAccount([string]$Location) {
+    $c = $script:Ctf
+    $probe = 'ctf-purge-probe-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
+    $out = & az cognitiveservices account purge -g $c.ResourceGroup -n $probe -l $Location --only-show-errors 2>&1 | Out-String
+    return ($out -notmatch 'AuthorizationFailed')
+}
+
 function Install-CtfC4Azure {
     $c = $script:Ctf
     if (-not (Test-CtfSelected 'c4')) { return }
     Write-CtfStep 'C4: Microsoft Foundry model deployment and ai-service identity'
-    if (-not (Test-AzCommand cognitiveservices account show -g $c.ResourceGroup -n $c.AoaiAccount)) {
+    $accountLocation = Invoke-AzTsv cognitiveservices account show -g $c.ResourceGroup -n $c.AoaiAccount --query location
+    if ($accountLocation -and -not $c.SkipInfra -and
+        -not (Test-AzCommand cognitiveservices account deployment show -g $c.ResourceGroup -n $c.AoaiAccount --deployment-name $c.DeploymentName) -and
+        (Test-CtfModelOffered $accountLocation) -eq $false) {
+        # An account without the model deployment, in a region that doesn't offer the model (as a run before the
+        # region check left it): delete it, so that it can be created again where the model is.
+        $location = Resolve-CtfAoaiLocation
+        if ($location -ne $accountLocation) {
+            # The name must be free again: delete, then purge. Without the access to purge, leave the account as it
+            # is, rather than delete it and leave its name taken for 48 hours.
+            if (-not (Test-CtfCanPurgeAccount $accountLocation)) {
+                throw ("Foundry account $($c.AoaiAccount) is in $accountLocation, which doesn't offer $($c.ModelName) $($c.ModelVersion). " +
+                    "To create it in $location, it must be deleted and purged, and purging needs subscription-level access, which this identity doesn't have. " +
+                    "With an identity that has it (Owner or Contributor of the subscription), run: az cognitiveservices account delete -g $($c.ResourceGroup) -n $($c.AoaiAccount); " +
+                    "az cognitiveservices account purge -g $($c.ResourceGroup) -n $($c.AoaiAccount) -l $accountLocation. Then run this again.")
+            }
+            Write-CtfInfo "Foundry account $($c.AoaiAccount) is in $accountLocation, which doesn't offer $($c.ModelName): re-creating it in $location ..."
+            Invoke-AzCommand cognitiveservices account delete -g $c.ResourceGroup -n $c.AoaiAccount | Out-Null
+            Invoke-AzCommand cognitiveservices account purge -g $c.ResourceGroup -n $c.AoaiAccount -l $accountLocation | Out-Null
+            $accountLocation = ''
+        }
+    }
+    if (-not $accountLocation) {
         if ($c.SkipInfra) { throw "Foundry account $($c.AoaiAccount) not found (remove -SkipInfra)" }
+        $accountLocation = Resolve-CtfAoaiLocation
         $deletedId = Invoke-AzTsv cognitiveservices account list-deleted --query "[?name=='$($c.AoaiAccount)'].id | [0]"
         if ($deletedId -and $deletedId -match '/locations/([^/]+)/resourceGroups/([^/]+)/') {
             Write-CtfInfo "Purging soft-deleted account $($c.AoaiAccount) ..."
             Test-AzCommand cognitiveservices account purge -n $c.AoaiAccount -g $Matches[2] -l $Matches[1] | Out-Null
         }
-        Invoke-AzCommand cognitiveservices account create -g $c.ResourceGroup -n $c.AoaiAccount -l $c.AoaiLocation `
-            --kind AIServices --sku S0 --custom-domain $c.AoaiAccount --yes -o none | Out-Null
-        Write-CtfOk "created Foundry account $($c.AoaiAccount) ($($c.AoaiLocation))"
+        try {
+            Invoke-AzCommand cognitiveservices account create -g $c.ResourceGroup -n $c.AoaiAccount -l $accountLocation `
+                --kind AIServices --sku S0 --custom-domain $c.AoaiAccount --yes -o none | Out-Null
+        }
+        catch {
+            if ($_.Exception.Message -notmatch 'CustomDomainInUse') { throw }
+            throw ("$($_.Exception.Message)`nThe name $($c.AoaiAccount) is probably held by a deleted Foundry account (deleted in the last 48 hours), " +
+                'which this identity can''t see or purge: that needs subscription-level access. With an identity that has it, run: ' +
+                "az cognitiveservices account list-deleted -o table; az cognitiveservices account purge -g $($c.ResourceGroup) -n $($c.AoaiAccount) -l <its location>. Then run this again.")
+        }
+        Write-CtfOk "created Foundry account $($c.AoaiAccount) ($accountLocation)"
     }
     $aoaiId = Invoke-AzTsv cognitiveservices account show -g $c.ResourceGroup -n $c.AoaiAccount --query id
     $c.Values.AZURE_OPENAI_ENDPOINT = "https://$($c.AoaiAccount).openai.azure.com/"
@@ -302,9 +382,18 @@ function Install-CtfC4Azure {
                     break
                 }
                 catch {
-                    if ($attempt -ge 6 -or $_.Exception.Message -notmatch 'RequestConflict|Another operation') { throw }
-                    Write-CtfInfo "The Foundry account is busy (attempt $attempt of 6) - retrying in 20 seconds ..."
-                    Start-Sleep -Seconds 20
+                    $message = $_.Exception.Message
+                    if ($attempt -lt 6 -and $message -match 'RequestConflict|Another operation') {
+                        Write-CtfInfo "The Foundry account is busy (attempt $attempt of 6) - retrying in 20 seconds ..."
+                        Start-Sleep -Seconds 20
+                        continue
+                    }
+                    if ($message -match 'SpecialFeatureOrQuotaIdRequired|InsufficientQuota|DeploymentModelNotSupported') {
+                        throw ("$message`nThis subscription can't deploy $($c.ModelName) $($c.ModelVersion) as Global Standard in " +
+                            "${accountLocation}: the region doesn't offer it, or there's no quota (az cognitiveservices usage list -l $accountLocation -o table). " +
+                            'Set -AoaiLocation (AOAI_LOCATION) to another region, choose another model with -ModelName and -ModelVersion, or leave c4 out.')
+                    }
+                    throw
                 }
             }
         }

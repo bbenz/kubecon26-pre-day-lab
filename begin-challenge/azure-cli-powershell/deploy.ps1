@@ -34,6 +34,8 @@ param(
     [string]$ModelVersion = $(if ($env:AOAI_MODEL_VERSION) { $env:AOAI_MODEL_VERSION } else { '2026-09-22' }),
     [string]$DeploymentName = $(if ($env:AOAI_DEPLOYMENT_NAME) { $env:AOAI_DEPLOYMENT_NAME } else { 'store-assistant' }),
     [int]$ModelCapacity = $(if ($env:AOAI_CAPACITY) { [int]$env:AOAI_CAPACITY } else { 50 }),
+    # The Foundry account's region. Default: the region, if it offers the model as Global Standard; otherwise the
+    # first of westus3, eastus2, and swedencentral that does.
     [string]$AoaiLocation = $env:AOAI_LOCATION
 )
 $ErrorActionPreference = 'Stop'
