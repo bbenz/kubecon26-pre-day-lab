@@ -143,6 +143,16 @@ GitHub Copilot is optional, but some challenges suggest an AI assistant. You sig
 
     > [!Note] If **aks-mcp** isn't listed, or Copilot can't use its tools, ask a proctor. You can complete every challenge without Copilot.
 
+## Task 6: Join the event leaderboard
+
+Optional. If your event has a leaderboard, your proctors show it on the screen. Join it to have your checks recorded there: it shows your first name and last initial, and the flags that you capture. Skip this task to keep your results to yourself: your checks work the same.
+
+1. [] Run the following command:
+
+    +++C:\LabFiles\kubecon26-pre-day-lab\scoring\join-leaderboard.ps1 -PlayerId "@lab.User.Id" -FirstName "@lab.User.FirstName" -LastName "@lab.User.LastName"+++
+
+    It shows **Joined the leaderboard as**, and the name that the leaderboard shows. You appear on the leaderboard with your first check. If it says that no leaderboard is open, or that its link isn't set up yet, your event doesn't have one right now: carry on, and ask a proctor if you expected one.
+
 ===
 
 # Tools and tips
@@ -181,7 +191,7 @@ The check runs the challenge's success criteria against your cluster, and shows 
 - For a quicker, less strict look while you work, add `-Quick`.
 - To check several challenges, separate them with commas, such as `c1,a2`. With no challenge, it checks every challenge in your cluster.
 
-> [!Note] If your event has a leaderboard, each check records your result there, with your first name and last initial. To keep a run off the leaderboard, add `-NoReport`. Runs with `-Quick` are never recorded.
+> [!Note] If you joined your event's leaderboard in **Get started**, Task 6, each check records your result there, with your first name and last initial. To keep a run off the leaderboard, add `-NoReport`. Runs with `-Quick` are never recorded. To leave the leaderboard, run +++C:\LabFiles\kubecon26-pre-day-lab\scoring\join-leaderboard.ps1 -Remove+++.
 
 ## Start a challenge over
 

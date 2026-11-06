@@ -85,7 +85,8 @@ begin-challenge/          deploy the challenges with their faults, and each chal
   azure-cli-powershell/   deploy.ps1, cleanup.ps1
   terraform/              Terraform root module
   challenges/<id>-*/      README.md (briefing, success criteria, hints) and manifests/
-scoring/                  verify.sh / verify.ps1 - check a challenge against its success criteria
+scoring/                  verify.sh / verify.ps1 - check a challenge against its success criteria;
+                          join-leaderboard.sh / .ps1 - join an event's leaderboard
 shared/                   code the three approaches share (bash library, PowerShell module, Terraform modules)
 skillable/                the hosted lab: lab VM image setup, life cycle actions, and the lab instructions
 tests/                    run the Kubernetes-only challenges on a local kind cluster

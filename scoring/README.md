@@ -32,9 +32,23 @@ and A2 runs the bounded load test.
 
 ## Event leaderboard
 
-At an event with a leaderboard, the lab VMs are registered for it (by the event's Skillable life cycle action, or the
-`CTF_LEADERBOARD_URL` / `CTF_PLAYER_ID` / `CTF_PLAYER_NAME` environment variables), and both scripts also record each
-checked challenge there: one write-once record with pass/fail and the number of checks passed, sent with a
-create-only token (`curl` in bash, `Invoke-WebRequest` in PowerShell). A failed submission prints one line and never
-changes the result or the exit code. `--no-report` / `-NoReport` skips it; `--quick` / `-Quick` runs are never recorded.
-On a machine that isn't registered, nothing is sent.
+At an event with a leaderboard, attendees who want to appear on it register their machine once with
+`join-leaderboard.ps1` or `join-leaderboard.sh`: the hosted lab's instructions have the command (**Get started**,
+Task 6). It reads the leaderboard's submit URL from the event's registration link, https://aka.ms/aksctfsecrets (a
+small text file that it reads, never runs), accepts only an Azure Storage address with a create-only token that hasn't
+expired, tests it with one write, and saves it in `~/.kubecon-ctf/leaderboard.env` with a player ID and the name that
+the leaderboard shows (first name and last initial):
+
+```bash
+scoring/join-leaderboard.sh --first-name Brian --last-name Benz     # or --name "Team Kube"; --remove leaves
+```
+
+```powershell
+./scoring/join-leaderboard.ps1 -FirstName Brian -LastName Benz     # or -Name 'Team Kube'; -Remove leaves
+```
+
+On a registered machine (or with the `CTF_LEADERBOARD_URL` / `CTF_PLAYER_ID` / `CTF_PLAYER_NAME` environment
+variables), both verify scripts also record each checked challenge there: one write-once record with pass/fail and the
+number of checks passed, sent with the create-only token (`curl` in bash, `Invoke-WebRequest` in PowerShell). A failed
+submission prints one line and never changes the result or the exit code. `--no-report` / `-NoReport` skips it;
+`--quick` / `-Quick` runs are never recorded. On a machine that isn't registered, nothing is sent.

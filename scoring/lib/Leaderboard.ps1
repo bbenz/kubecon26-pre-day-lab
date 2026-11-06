@@ -1,17 +1,17 @@
 # -----------------------------------------------------------------------------
 # KubeCon AKS capture-the-flag lab - leaderboard reporting for scoring/verify.ps1.
 #
-# When this machine is registered for an event leaderboard (by the event's Skillable life cycle action,
-# or by the event team's registration script), every challenge that verify.ps1 checks is recorded on the
-# leaderboard: one small, write-once record per challenge and run, sent with a create-only token.
+# When this machine is registered for an event leaderboard (by scoring/join-leaderboard.ps1 or .sh, which the
+# lab instructions run, or by a Skillable life cycle action), every challenge that verify.ps1 checks is recorded
+# on the leaderboard: one small, write-once record per challenge and run, sent with a create-only token.
 # Nothing happens on machines that aren't registered.
 #
 # Registration (first match wins):
 #   1. environment: CTF_LEADERBOARD_URL, CTF_PLAYER_ID, CTF_PLAYER_NAME
 #   2. the file named by CTF_LEADERBOARD_CONFIG
-#   3. ~/.kubecon-ctf/leaderboard.env                (registration script)
-#   4. %ProgramData%\kubecon-ctf\leaderboard.env     (Skillable, Windows VM)
-#      /etc/kubecon-ctf/leaderboard.env              (Skillable, Linux VM)
+#   3. ~/.kubecon-ctf/leaderboard.env                (scoring/join-leaderboard.*)
+#   4. %ProgramData%\kubecon-ctf\leaderboard.env     (a Skillable life cycle action, Windows VM)
+#      /etc/kubecon-ctf/leaderboard.env              (a Skillable life cycle action, Linux VM)
 # -----------------------------------------------------------------------------
 
 $script:Lb = $null
