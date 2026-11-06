@@ -4,8 +4,8 @@
     state (the challenges with their seeded faults) as the cloud subscription's service principal.
 
 .DESCRIPTION
-    Paste this whole script into a Skillable life cycle action. The lab team's LCA runbook has the
-    steps:
+    Paste this whole script into a Skillable life cycle action, the lab's only one. The lab team's LCA
+    runbook has the steps:
 
       Action: Execute Script in Virtual Machine    Language: PowerShell
       Event: First Displayable                     Blocking: Yes    Delay: 60 seconds
@@ -17,8 +17,10 @@
     its skillable\lca\Invoke-CtfLabSetup.ps1 as SYSTEM in a scheduled task, so that a Skillable timeout
     can't stop it, and a retry waits for the same run. The worker deploys the begin state with the
     repository's begin-challenge\azure-cli-powershell\deploy.ps1, gives the cloud portal user its roles,
-    sets up the lab user's kubeconfig and Azure CLI, and runs the readiness gate. The readiness gate LCA
-    removes the service principal from the VM before the attendee gets it.
+    sets up the lab user's kubeconfig and Azure CLI, runs the readiness checks, and removes the service
+    principal from the VM, whatever the result. However this script ends, it then starts the repository's
+    skillable\lca\Invoke-CtfLabCleanup.ps1, which clears the PowerShell event logs once this PowerShell
+    has exited. The results are in the repository's .lab\skillable\begin-state-<time>.log.
 
     Manual = $true runs the same steps in this window as you, the cloud portal user, with your own
     Azure CLI sign-in, to test before a pool admin turns on the cloud credentials.
@@ -55,8 +57,8 @@ $Settings = [ordered]@{
     RepoUrl           = 'https://github.com/bbenz/kubecon26-pre-day-lab'
     RepoRef           = 'main'                # A branch or tag: a tag for the event, such as v1.0.0
     LabRoot           = 'C:\LabFiles\kubecon26-pre-day-lab'   # The lab repository on the VM (the image has it)
-    RemoveCredentials = 'AfterGate'           # AfterGate, AfterPrepare (no readiness gate LCA), or Never (testing)
-    GateFailsPrepare  = $false                # $true for the event: a failed readiness gate fails this action
+    RemoveCredentials = 'AfterPrepare'        # Removes the service principal from the VM at the end of every run. Never: testing only
+    GateFailsPrepare  = $false                # $true for the event: a failed readiness check fails this action
     WaitMinutes       = 50                    # Keep it 10 below the Timeout. The worker keeps running after that.
     Manual            = $false                # $true: run by hand as yourself (see the LCA runbook)
 }
@@ -171,77 +173,101 @@ function Initialize-ManualRun {
     $Settings.RemoveCredentials = 'Never'
 }
 
-# 1. Credentials, or your own sign-in in a manual run
-if (-not (Test-Path -LiteralPath $Pwsh)) { throw "$Pwsh is missing. Build the VM image with skillable\vm-image\kubecon-ctf-vm-image-setup.ps1." }
-if ($Manual) {
-    Initialize-ManualRun
-} else {
-    $problem = Get-CredentialProblem
-    if ($problem) { throw "KubeCon CTF prepare can't start: $problem. The LCA runbook has the details." }
-    foreach ($name in 'TenantId', 'SubscriptionId', 'ClientId', 'ClientSecret') { $Settings[$name] = [string]$CloudSubscription[$name] }
+function Start-Cleanup {
+    # However this script ends, a SYSTEM task waits for this PowerShell to exit, and then clears the PowerShell event
+    # logs, which hold this script's text with the secret: the lab repository's skillable\lca\Invoke-CtfLabCleanup.ps1.
+    if ($Manual -or $CloudSubscription.Count -eq 0 -or [string]$Settings.RemoveCredentials -eq 'Never') { return }
+    $cleanup = Join-Path $Root 'skillable\lca\Invoke-CtfLabCleanup.ps1'
+    try {
+        if (-not (Test-Path -LiteralPath $cleanup) -or -not (Test-Path -LiteralPath $Pwsh)) { throw "$cleanup or $Pwsh is missing." }
+        $start = (Get-Process -Id $PID).StartTime.ToFileTimeUtc()
+        $action = New-ScheduledTaskAction -Execute $Pwsh -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$cleanup`" -LauncherPid $PID -LauncherStart $start"
+        $principal = New-ScheduledTaskPrincipal -UserId 'NT AUTHORITY\SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+        $options = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 30) -MultipleInstances Parallel -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+        Register-ScheduledTask -TaskName 'KubeCon CTF LCA cleanup' -Action $action -Principal $principal -Settings $options -Force | Out-Null
+        Start-ScheduledTask -TaskName 'KubeCon CTF LCA cleanup'
+    } catch {
+        # Without the task, at least clear this script's events now.
+        foreach ($log in 'Microsoft-Windows-PowerShell/Operational', 'PowerShellCore/Operational', 'Windows PowerShell') { $null = Invoke-Native 'wevtutil.exe' @('cl', $log) }
+        Write-Output "WARNING: couldn't start the cleanup task, so this script cleared the PowerShell event logs itself. $($_.Exception.Message)"
+    }
 }
 
-# 2. Start the worker, or wait for the one that's already running
-New-Item -ItemType Directory -Path $LcaDir -Force | Out-Null
-$acl = Invoke-Native 'icacls.exe' @($LcaDir, '/inheritance:r', '/grant:r', '*S-1-5-18:(OI)(CI)F', '*S-1-5-32-544:(OI)(CI)F')
-if ($acl.Code -ne 0) { throw "Couldn't restrict access to $LcaDir, so no settings were saved. $($acl.Text)" }
-$state = Read-State
-$running = $state -and $state.status -eq 'Running' -and (Get-Process -Id ([int]$state.processId) -ErrorAction SilentlyContinue)
-if ($running -and $Manual) { throw 'The prepare LCA is still running in this VM. Wait for it to finish, and run this script again.' }
-if ($running) {
-    Write-Output "The prepare worker started at $($state.startedAt) is still running, so this run waits for it."
-} else {
-    $repo = Update-Repository
-    $labUser = Get-LabUser
-    $config = [ordered]@{}
-    foreach ($key in $Settings.Keys) { $config[$key] = $Settings[$key] }
-    $config.LabUser = $labUser.Name
-    $config.LabProfile = $labUser.Profile
-    $config.RepoCommit = $repo
-    $sha = [Security.Cryptography.SHA256]::Create()
-    $plain = (($config.Keys | Where-Object { $_ -ne 'ClientSecret' } | ForEach-Object { "$_=$($config[$_])" }) -join ';')
-    $config.Signature = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($plain))).Replace('-', '')
-    if (-not $Manual -and $state -and $state.status -eq 'Succeeded' -and $state.signature -eq $config.Signature) {
-        Write-Output "KubeCon CTF lab is already prepared with these settings ($repo). Summary for troubleshooting: $($state.setupLog)"
-        return
-    }
-    [IO.File]::WriteAllText($ConfigPath, ($config | ConvertTo-Json -Depth 4), (New-Object Text.UTF8Encoding($false)))
-    Remove-Item -LiteralPath $StatePath -Force -ErrorAction SilentlyContinue
-    $workerArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Worker, '-Mode', 'Prepare', '-ConfigPath', $ConfigPath, '-LaunchedAt', $LaunchedAt)
+try {
+    # 1. Credentials, or your own sign-in in a manual run
+    if (-not (Test-Path -LiteralPath $Pwsh)) { throw "$Pwsh is missing. Build the VM image with skillable\vm-image\kubecon-ctf-vm-image-setup.ps1." }
     if ($Manual) {
-        Write-Host "KubeCon CTF begin state, by hand: resource group $($Settings.ResourceGroup), as $($Settings.PortalUser). Repository $repo."
-        Write-Host 'It takes 20 to 30 minutes. Logs: C:\ProgramData\kubecon-ctf-lca'
-        & $Pwsh @workerArgs
+        Initialize-ManualRun
     } else {
-        $action = New-ScheduledTaskAction -Execute $Pwsh -Argument (($workerArgs | ForEach-Object { if ($_ -match '\s') { "`"$_`"" } else { $_ } }) -join ' ')
-        $principal = New-ScheduledTaskPrincipal -UserId 'NT AUTHORITY\SYSTEM' -LogonType ServiceAccount -RunLevel Highest
-        $taskSettings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Hours 3) -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-        Register-ScheduledTask -TaskName $TaskName -Action $action -Principal $principal -Settings $taskSettings -Force | Out-Null
-        Start-ScheduledTask -TaskName $TaskName
-        Write-Output "Started the prepare worker ($repo)."
+        $problem = Get-CredentialProblem
+        if ($problem) { throw "KubeCon CTF prepare can't start: $problem. The LCA runbook has the details." }
+        foreach ($name in 'TenantId', 'SubscriptionId', 'ClientId', 'ClientSecret') { $Settings[$name] = [string]$CloudSubscription[$name] }
     }
-}
-# 3. Wait for the result
-$deadline = (Get-Date).AddMinutes([int]$Settings.WaitMinutes)
-while (-not $Manual) {
+
+    # 2. Start the worker, or wait for the one that's already running
+    New-Item -ItemType Directory -Path $LcaDir -Force | Out-Null
+    $acl = Invoke-Native 'icacls.exe' @($LcaDir, '/inheritance:r', '/grant:r', '*S-1-5-18:(OI)(CI)F', '*S-1-5-32-544:(OI)(CI)F')
+    if ($acl.Code -ne 0) { throw "Couldn't restrict access to $LcaDir, so no settings were saved. $($acl.Text)" }
     $state = Read-State
-    $alive = $state -and (Get-Process -Id ([int]$state.processId) -ErrorAction SilentlyContinue)
-    if ($state -and ($state.status -ne 'Running' -or -not $alive)) { break }
-    if (-not $state -and (Get-ScheduledTask -TaskName $TaskName).State -ne 'Running' -and (Get-Date) -gt ([datetime]$LaunchedAt).AddMinutes(2)) {
-        throw "The KubeCon CTF prepare worker stopped before it wrote its state. Last task result: $((Get-ScheduledTaskInfo -TaskName $TaskName).LastTaskResult)."
+    $running = $state -and $state.status -eq 'Running' -and (Get-Process -Id ([int]$state.processId) -ErrorAction SilentlyContinue)
+    if ($running -and $Manual) { throw 'The prepare LCA is still running in this VM. Wait for it to finish, and run this script again.' }
+    if ($running) {
+        Write-Output "The prepare worker started at $($state.startedAt) is still running, so this run waits for it."
+    } else {
+        $repo = Update-Repository
+        $labUser = Get-LabUser
+        $config = [ordered]@{}
+        foreach ($key in $Settings.Keys) { $config[$key] = $Settings[$key] }
+        $config.LabUser = $labUser.Name
+        $config.LabProfile = $labUser.Profile
+        $config.RepoCommit = $repo
+        $sha = [Security.Cryptography.SHA256]::Create()
+        $plain = (($config.Keys | Where-Object { $_ -ne 'ClientSecret' } | ForEach-Object { "$_=$($config[$_])" }) -join ';')
+        $config.Signature = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($plain))).Replace('-', '')
+        if (-not $Manual -and $state -and $state.status -eq 'Succeeded' -and $state.signature -eq $config.Signature) {
+            Write-Output "KubeCon CTF lab is already prepared with these settings ($repo). Summary for troubleshooting: $($state.setupLog)"
+            return
+        }
+        [IO.File]::WriteAllText($ConfigPath, ($config | ConvertTo-Json -Depth 4), (New-Object Text.UTF8Encoding($false)))
+        Remove-Item -LiteralPath $StatePath -Force -ErrorAction SilentlyContinue
+        $workerArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Worker, '-Mode', 'Prepare', '-ConfigPath', $ConfigPath, '-LaunchedAt', $LaunchedAt)
+        if ($Manual) {
+            Write-Host "KubeCon CTF begin state, by hand: resource group $($Settings.ResourceGroup), as $($Settings.PortalUser). Repository $repo."
+            Write-Host 'It takes 20 to 30 minutes. Logs: C:\ProgramData\kubecon-ctf-lca'
+            & $Pwsh @workerArgs
+        } else {
+            $action = New-ScheduledTaskAction -Execute $Pwsh -Argument (($workerArgs | ForEach-Object { if ($_ -match '\s') { "`"$_`"" } else { $_ } }) -join ' ')
+            $principal = New-ScheduledTaskPrincipal -UserId 'NT AUTHORITY\SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+            $taskSettings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Hours 3) -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+            Register-ScheduledTask -TaskName $TaskName -Action $action -Principal $principal -Settings $taskSettings -Force | Out-Null
+            Start-ScheduledTask -TaskName $TaskName
+            Write-Output "Started the prepare worker ($repo)."
+        }
     }
-    if ((Get-Date) -gt $deadline) {
-        throw "KubeCon CTF prepare is still running after $($Settings.WaitMinutes) minutes. The worker keeps running, and a retry waits for it. Log: $($state.log)"
+    # 3. Wait for the result
+    $deadline = (Get-Date).AddMinutes([int]$Settings.WaitMinutes)
+    while (-not $Manual) {
+        $state = Read-State
+        $alive = $state -and (Get-Process -Id ([int]$state.processId) -ErrorAction SilentlyContinue)
+        if ($state -and ($state.status -ne 'Running' -or -not $alive)) { break }
+        if (-not $state -and (Get-ScheduledTask -TaskName $TaskName).State -ne 'Running' -and (Get-Date) -gt ([datetime]$LaunchedAt).AddMinutes(2)) {
+            throw "The KubeCon CTF prepare worker stopped before it wrote its state. Last task result: $((Get-ScheduledTaskInfo -TaskName $TaskName).LastTaskResult)."
+        }
+        if ((Get-Date) -gt $deadline) {
+            throw "KubeCon CTF prepare is still running after $($Settings.WaitMinutes) minutes. The worker keeps running, and a retry waits for it. Log: $($state.log)"
+        }
+        Start-Sleep -Seconds 15
     }
-    Start-Sleep -Seconds 15
-}
-$state = Read-State
-if ($state -and $state.status -eq 'Running') { $state.status = 'Failed'; $state.message = 'The worker stopped unexpectedly.' }
-$cleaned = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
-if ($cleaned.ClientSecret) { $cleaned.ClientSecret = ''; [IO.File]::WriteAllText($ConfigPath, ($cleaned | ConvertTo-Json -Depth 4), (New-Object Text.UTF8Encoding($false))) }
-$end = "Summary for troubleshooting: $($state.setupLog) Total elapsed time: $($state.elapsed)."
-switch ([string]$state.status) {
-    'Succeeded'  { Write-Output "KubeCon CTF lab is ready. $($state.message) $end" }
-    'Incomplete' { Write-Output "KubeCon CTF prepare finished, but the environment isn't complete. $($state.message) $end" }
-    default      { throw "KubeCon CTF prepare failed. $($state.message) $end" }
+    $state = Read-State
+    if ($state -and $state.status -eq 'Running') { $state.status = 'Failed'; $state.message = 'The worker stopped unexpectedly.' }
+    $cleaned = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
+    if ($cleaned.ClientSecret) { $cleaned.ClientSecret = ''; [IO.File]::WriteAllText($ConfigPath, ($cleaned | ConvertTo-Json -Depth 4), (New-Object Text.UTF8Encoding($false))) }
+    $end = "Summary for troubleshooting: $($state.setupLog) Total elapsed time: $($state.elapsed)."
+    switch ([string]$state.status) {
+        'Succeeded'  { Write-Output "KubeCon CTF lab is ready. $($state.message) $end" }
+        'Incomplete' { Write-Output "KubeCon CTF prepare finished, but the environment isn't complete. $($state.message) $end" }
+        default      { throw "KubeCon CTF prepare failed. $($state.message) $end" }
+    }
+} finally {
+    Start-Cleanup
 }

@@ -3,36 +3,34 @@
     KubeCon AKS capture-the-flag lab: the Skillable life cycle action (LCA) worker.
 
 .DESCRIPTION
-    Builds and checks one attendee's lab environment. Two short LCA scripts run it from the lab repository
-    on the VM (C:\LabFiles\kubecon26-pre-day-lab, a shallow clone that the VM image has):
+    Builds and checks one attendee's lab environment. The prepare LCA, prepare-lab-environment.ps1, runs it at
+    First Displayable from the lab repository on the VM (C:\LabFiles\kubecon26-pre-day-lab, a shallow clone that
+    the VM image has): it moves the lab repository to RepoRef, saves the settings and the cloud subscription's
+    service principal to config.json, and runs this script as SYSTEM, in a scheduled task.
 
-      prepare-lab-environment.ps1  First Displayable. Moves the lab repository to RepoRef, saves the settings
-                                   and the cloud subscription's service principal to config.json, and runs
-                                   this script with -Mode Prepare as SYSTEM, in a scheduled task.
-      readiness-gate.ps1           Running Preinstance Assigned To User. Runs it with -Mode Verify.
+    It keeps only the checked-out commit in the lab repository (no other branches or history), signs in as the
+    service principal in its own Azure CLI profile, registers the lab's resource providers, and deploys the BEGIN
+    state of the selected challenges with the repository's begin-challenge/azure-cli-powershell/deploy.ps1, the
+    same script that attendees run to reset a challenge. Then it gives the cloud portal user its roles, sets up the
+    lab user's Azure CLI for browser sign-in, optionally installs the Inspektor Gadget cluster extension, and runs
+    the readiness checks. deploy.ps1 writes the lab user's kubeconfig (KUBECONFIG points at it).
 
-    Prepare  Keeps only the checked-out commit in the lab repository (no other branches or history). Signs in
-             as the service principal in its own Azure CLI profile, registers the lab's resource providers,
-             and deploys the BEGIN state of the selected challenges with the repository's
-             begin-challenge/azure-cli-powershell/deploy.ps1, the same script that attendees run to reset a
-             challenge. Then it gives the cloud portal user its roles, sets up the lab user's Azure CLI for
-             browser sign-in, optionally installs the Inspektor Gadget cluster extension, and runs the
-             readiness gate. deploy.ps1 writes the lab user's kubeconfig (KUBECONFIG points at it).
-    Verify   Runs the readiness gate, and then removes the service principal from the VM: it deletes
-             the service principal's Azure CLI profile, and clears the PowerShell event logs, which
-             hold the prepare LCA's text with the secret.
+    Last, whatever the result, it removes the service principal from the VM, because an attendee gets the VM next:
+    it deletes the service principal's Azure CLI profile, and clears the PowerShell event logs, which hold the
+    prepare LCA's text with the secret. When the prepare LCA ends, Invoke-CtfLabCleanup.ps1 clears them again.
 
-    With Manual set in config.json (the prepare LCA's Manual setting), Prepare runs in the current
-    window as the signed-in Azure CLI user instead of the service principal, for testing.
+    With Manual set in config.json (the prepare LCA's Manual setting), it runs in the current window as the
+    signed-in Azure CLI user instead of the service principal, for testing, and keeps that sign-in.
 
-    Logs and state are in C:\ProgramData\kubecon-ctf-lca. A copy of each log, ending with a summary,
-    goes to .lab\skillable in the lab repository, where a proctor can open it in VS Code. The lab
-    team's LCA runbook has the details.
+    Logs and state are in C:\ProgramData\kubecon-ctf-lca. A copy of the log, ending with a summary and the
+    readiness checks, goes to .lab\skillable\begin-state-<time>.log in the lab repository, where an instructor
+    can open it in VS Code. The lab team's LCA runbook has the details.
 #>
 #Requires -Version 7.4
 [CmdletBinding()]
 param(
-    [ValidateSet('Prepare', 'Verify')]
+    # Prepare is the only mode: the readiness checks run at the end of every prepare run.
+    [ValidateSet('Prepare')]
     [string]$Mode = 'Prepare',
     [string]$ConfigPath = 'C:\ProgramData\kubecon-ctf-lca\config.json',
     # When the LCA started (ISO 8601), for the total elapsed time
@@ -84,7 +82,7 @@ $env:AZURE_CONFIG_DIR = $AzureDir
 $env:KUBECONFIG = $Kubeconfig
 $env:AZURE_CORE_COLLECT_TELEMETRY = 'false'
 $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
-# A failure here mustn't stop a readiness gate before it removes the credentials: Initialize-Context reports it.
+# A failure here mustn't stop the run before it removes the credentials: Initialize-Context reports it.
 $ModuleError = ''
 $AllChallenges = @()
 $Namespaces = @{}
@@ -104,7 +102,7 @@ if (-not $Selected -or $Selected -contains 'all') { $Selected = $AllChallenges }
 try {
     $copyDir = Join-Path $RepoRoot '.lab\skillable'
     New-Item -ItemType Directory -Path $copyDir -Force | Out-Null
-    $CopyPath = Join-Path $copyDir ('{0}-{1}.log' -f $(if ($Mode -eq 'Verify') { 'readiness-gate' } else { 'begin-state' }), $Stamp)
+    $CopyPath = Join-Path $copyDir "begin-state-$Stamp.log"
 } catch { $CopyPath = '' }
 
 function Write-Log([string]$Text) {
@@ -254,8 +252,8 @@ function Initialize-Context {
     }
     if (-not $Manual -and -not (Test-Resolved $Cfg.ClientId)) { throw 'ClientId has no value. A pool admin turns on the CLOUD CREDENTIALS section.' }
     if ($Mode -eq 'Prepare' -and -not $Manual -and -not $Secret) { throw 'ClientSecret has no value. A pool admin turns on the CLOUD CREDENTIALS section.' }
-    if ([string]$Cfg.RemoveCredentials -notin 'AfterGate', 'AfterPrepare', 'Never') {
-        throw "RemoveCredentials is '$($Cfg.RemoveCredentials)'. Use AfterGate, AfterPrepare, or Never."
+    if ([string]$Cfg.RemoveCredentials -notin 'AfterPrepare', 'AfterGate', 'Never') {
+        throw "RemoveCredentials is '$($Cfg.RemoveCredentials)'. Use AfterPrepare, or Never for testing."
     }
     foreach ($tool in $AzPython, $KubectlExe, (Join-Path $K8sDir 'kubelogin.exe')) {
         if (-not (Test-Path -LiteralPath $tool)) { throw "$tool is missing. Build the VM image with skillable\vm-image\kubecon-ctf-vm-image-setup.ps1." }
@@ -423,7 +421,7 @@ function Install-InspektorGadget {
 }
 
 # ---------------------------------------------------------------------------------------------
-# Readiness gate, and removing the service principal from the VM
+# Readiness checks, and removing the service principal from the VM
 # ---------------------------------------------------------------------------------------------
 function Add-Check([string]$Name, [bool]$Passed, [string]$Detail, [string]$Severity = 'FAIL') {
     $Checks.Add([pscustomobject]@{ check = $Name; result = $(if ($Passed) { 'PASS' } else { $Severity }); detail = $Detail })
@@ -460,7 +458,7 @@ function Invoke-Check([string]$Name, [string]$Severity, [scriptblock]$Test) {
 }
 
 function Test-Readiness {
-    Write-Log '==> Readiness gate'
+    Write-Log '==> Readiness checks'
     $rgId = Get-AzValue @('group', 'show', '--name', $RG, '--query', 'id')
     Invoke-Check 'Azure sign-in' 'FAIL' {
         $a = Get-AzJson @('account', 'show')
@@ -583,29 +581,10 @@ function Remove-CloudCredential {
     return [int]($left.Count -gt 0)
 }
 
-function Test-RemoveCredentials([int]$Failures) {
-    if ($Manual) { return $false }
-    switch ([string]$Cfg.RemoveCredentials) {
-        'AfterGate'    { return ($Mode -eq 'Verify') }
-        'AfterPrepare' { return ($Mode -eq 'Verify' -or ($Failures -eq 0 -and @($Steps | Where-Object { $_.result -ne 'READY' }).Count -eq 0)) }
-    }
-    return $false
-}
-
-function Wait-ForPrepare {
-    # The readiness gate waits up to 15 minutes for a prepare worker that's still running.
-    $prepareState = Join-Path $LcaDir 'state-prepare.json'
-    if (-not (Test-Path -LiteralPath $prepareState)) { throw 'The prepare LCA has not run in this VM.' }
-    $deadline = (Get-Date).AddMinutes(15)
-    while ($true) {
-        $p = Get-Content -LiteralPath $prepareState -Raw | ConvertFrom-Json
-        $running = $p.status -eq 'Running' -and (Get-Process -Id ([int]$p.processId) -ErrorAction SilentlyContinue)
-        if (-not $running) { break }
-        if ((Get-Date) -gt $deadline) { throw 'The prepare worker is still running after 15 minutes. Run the readiness gate again when it finishes.' }
-        Start-Sleep -Seconds 20
-    }
-    foreach ($property in $p.lab.PSObject.Properties) { $Lab[$property.Name] = $property.Value }
-    return "Prepare result: $($p.status). $($p.message)"
+function Test-RemoveCredentials {
+    # Every run removes the service principal, whatever the result: no LCA runs after this one before an attendee gets
+    # the VM, and a retry of the prepare LCA signs in again with its tokens. AfterGate, the old default, works the same.
+    return (-not $Manual -and [string]$Cfg.RemoveCredentials -ne 'Never')
 }
 
 function Write-Summary([string]$Status, [string]$Message) {
@@ -617,6 +596,7 @@ function Write-Summary([string]$Status, [string]$Message) {
     foreach ($s in @($Steps | Where-Object { $_.result -ne 'READY' })) { $lines.Add("Step $($s.result): $($s.step). $($s.detail)") }
     foreach ($c in @($Checks | Where-Object { $_.result -ne 'PASS' })) { $lines.Add("Check $($c.result): $($c.check). $($c.detail)") }
     $lines.Add("Full log: $LogPath")
+    if (Test-RemoveCredentials) { $lines.Add('When the prepare LCA ends, its cleanup task adds a last Cloud credentials removed line below.') }
     foreach ($line in $lines) { Write-Log $line }
 }
 
@@ -633,37 +613,32 @@ if ($Mode -eq 'Prepare' -and (Test-Path -LiteralPath $StatePath)) {
 $status = 'Failed'
 $message = ''
 try {
-    Write-Log "KubeCon CTF lab LCA worker. Mode: $Mode. Resource group: $RG. Cluster: $Cluster."
+    Write-Log "KubeCon CTF lab LCA worker. Resource group: $RG. Cluster: $Cluster."
     Save-State 'Running' 'Starting'
-    if ($Mode -eq 'Prepare') {
-        Invoke-Step 'Context' { Initialize-Context }
-        Invoke-Step 'Lab repository' { Initialize-Repository } -Optional
-        Invoke-Step 'Azure sign-in' { Connect-Azure }
-        Invoke-Step 'Resource group' { Initialize-ResourceGroup }
-        Invoke-Step 'Resource providers' { Register-Providers } -Optional
-        Invoke-Step 'Begin state (deploy.ps1)' { Invoke-BeginState }
-        Invoke-Step 'Portal user access' { Grant-PortalUser } -Optional
-        Invoke-Step 'Attendee Azure CLI' { Set-AttendeeCli } -Optional
-        if ($Cfg.InspektorGadget) { Invoke-Step 'Inspektor Gadget' { Install-InspektorGadget } -Optional }
-    } else {
-        Invoke-Step 'Prepare result' { Wait-ForPrepare }
-        Invoke-Step 'Context' { Initialize-Context }
-    }
+    Invoke-Step 'Context' { Initialize-Context }
+    Invoke-Step 'Lab repository' { Initialize-Repository } -Optional
+    Invoke-Step 'Azure sign-in' { Connect-Azure }
+    Invoke-Step 'Resource group' { Initialize-ResourceGroup }
+    Invoke-Step 'Resource providers' { Register-Providers } -Optional
+    Invoke-Step 'Begin state (deploy.ps1)' { Invoke-BeginState }
+    Invoke-Step 'Portal user access' { Grant-PortalUser } -Optional
+    Invoke-Step 'Attendee Azure CLI' { Set-AttendeeCli } -Optional
+    if ($Cfg.InspektorGadget) { Invoke-Step 'Inspektor Gadget' { Install-InspektorGadget } -Optional }
     $failures = Test-Readiness
-    if (Test-RemoveCredentials $failures) { $failures += Remove-CloudCredential }
+    if (Test-RemoveCredentials) { $failures += Remove-CloudCredential }
     $warnings = @($Steps | Where-Object { $_.result -eq 'WARN' } | ForEach-Object { $_.step })
     $failedChecks = @($Checks | Where-Object { $_.result -eq 'FAIL' } | ForEach-Object { $_.check })
-    $message = if ($failures -gt 0) { "Readiness gate: $failures failed ($($failedChecks -join ', '))." } else { 'Readiness gate passed.' }
+    $message = if ($failures -gt 0) { "Readiness checks: $failures failed ($($failedChecks -join ', '))." } else { 'Readiness checks passed.' }
     if ($warnings) { $message += " Steps with warnings: $($warnings -join ', ')." }
-    $status = if ($failures -gt 0 -and ($Mode -eq 'Verify' -or $Cfg.GateFailsPrepare)) { 'Failed' }
+    $status = if ($failures -gt 0 -and $Cfg.GateFailsPrepare) { 'Failed' }
               elseif ($failures -gt 0 -or $warnings) { 'Incomplete' } else { 'Succeeded' }
 } catch {
     $status = 'Failed'
     $message = $_.Exception.Message
     Write-Log "STOPPED: $message"
 } finally {
-    # The attendee gets the VM next, so a readiness gate that stops early still removes the credentials.
-    if ($Mode -eq 'Verify' -and -not $Manual -and -not $CredentialsRemoved -and [string]$Cfg.RemoveCredentials -ne 'Never') {
+    # An attendee gets the VM next, so a run that stops early removes the service principal too.
+    if (-not $CredentialsRemoved -and (Test-RemoveCredentials)) {
         try { Remove-CloudCredential | Out-Null } catch { Write-Log "Couldn't remove the cloud credentials. $($_.Exception.Message)" }
     }
     Save-State $status $message

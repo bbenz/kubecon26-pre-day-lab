@@ -1330,9 +1330,11 @@ function Invoke-Finalize {
     $targets = @(Invoke-Native { cmdkey.exe /list } | ForEach-Object { if ("$_" -match 'Target:\s*(?:\S+:target=)?(.+)$') { $Matches[1].Trim() } } |
                  Where-Object { $_ -match '(?i)vscode|github|^git:|gh:' })
     foreach ($target in $targets) { Invoke-Native { cmdkey.exe "/delete:$target" } | Out-Null }
-    # Lab state from a test run of the LCAs in this VM: their settings, state, logs, and scheduled task, and the
+    # Lab state from a test run of the LCA in this VM: its settings, state, logs, and scheduled tasks, and the
     # deployment state in the lab folder.
-    Unregister-ScheduledTask -TaskName 'KubeCon CTF LCA worker' -Confirm:$false -ErrorAction SilentlyContinue
+    foreach ($task in 'KubeCon CTF LCA worker', 'KubeCon CTF LCA cleanup') {
+        Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue
+    }
     foreach ($path in (Join-Path $env:USERPROFILE '.kube'),
                       (Join-Path $env:APPDATA 'GitHub CLI\hosts.yml'),
                       $LcaStateDir,
