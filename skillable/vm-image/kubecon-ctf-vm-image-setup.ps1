@@ -119,6 +119,11 @@ $CopilotExtension = 'GitHub.copilot-chat'
 # AKS-MCP publishes no checksums file and its binary isn't signed, so the version and SHA-256 are pinned here.
 $AksMcpTag    = 'v0.0.22'
 $AksMcpSha256 = 'D0274045FA525A983C1328D371A51B5CDFDE313F672CB59C15682AD5C37F67EA'
+# Without --enabled-components, AKS-MCP turns on every component, and doesn't start without the cilium and hubble CLIs,
+# which the lab doesn't use: its clusters don't have Advanced Container Networking Services. The prepare LCA's worker
+# (skillable\lca\Invoke-CtfLabSetup.ps1) sets the same arguments at each launch: keep the two the same.
+$AksMcpArgs   = '--access-level', 'readwrite', '--timeout', '600', '--enabled-components',
+                'az_cli,monitor,fleet,network,compute,detectors,advisor,inspektorgadget,kubectl,helm'
 # Challenge C2's README pins ingress2gateway 1.2.0.
 $Ingress2GatewayTag = 'v1.2.0'
 $MinAzureCli  = [version]'2.86.0'   # The lab's deployment scripts need 2.86 or later
@@ -308,6 +313,71 @@ function Get-VersionText([string]$Executable, [string[]]$Arguments) {
     if (-not (Test-Path -LiteralPath $Executable)) { return '' }
     $text = (Invoke-Native { & $Executable @Arguments 2>&1 } | Out-String)
     return ([regex]::Match($text, '\d+\.\d+\.\d+')).Value
+}
+
+function Test-AksMcpServer {
+    # Starts AKS-MCP the way VS Code does, from this user's mcp.json, and asks for its tools over MCP (initialize, then
+    # tools/list). It needs no Azure sign-in to start; an empty, temporary Azure CLI profile keeps the image's as it is.
+    $mcpPath = Join-Path $env:APPDATA 'Code\User\mcp.json'
+    $aksMcp = Join-Path $K8sDir 'aks-mcp.exe'
+    $server = $null
+    try { $server = (Get-Content -LiteralPath $mcpPath -Raw | ConvertFrom-Json).servers.'aks-mcp' } catch { }
+    if (-not $server -or $server.command -ne $aksMcp -or -not (Test-Path -LiteralPath $aksMcp)) {
+        return [pscustomobject]@{ Ok = $false; Detail = "$mcpPath doesn't start $aksMcp, or $aksMcp is missing." }
+    }
+    $arguments = @($server.args | ForEach-Object { [string]$_ })
+    $psi = New-Object System.Diagnostics.ProcessStartInfo $aksMcp
+    $psi.Arguments = ($arguments | ForEach-Object { if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ } }) -join ' '
+    $psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
+    $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
+    # VS Code's environment after sign-in: the system and user PATH, which this session may not have yet
+    $psi.EnvironmentVariables['PATH'] = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
+                                        [Environment]::GetEnvironmentVariable('Path', 'User')
+    if ($server.env) { foreach ($property in $server.env.PSObject.Properties) { $psi.EnvironmentVariables[$property.Name] = [string]$property.Value } }
+    $profileDir = Join-Path $env:TEMP "kubecon-ctf-aks-mcp-$PID"
+    $psi.EnvironmentVariables['AZURE_CONFIG_DIR'] = $profileDir
+    $other = New-Object System.Collections.Generic.List[string]
+    $tools = @()
+    $process = [System.Diagnostics.Process]::Start($psi)
+    $stderr = $process.StandardError.ReadToEndAsync()
+    $readReply = {
+        # The JSON-RPC reply with this ID. Other lines, such as AKS-MCP's validation errors, go to the detail.
+        param([int]$Id, [datetime]$Deadline)
+        while ((Get-Date) -lt $Deadline) {
+            $line = $process.StandardOutput.ReadLineAsync()
+            if (-not $line.Wait([int][Math]::Max(1, ($Deadline - (Get-Date)).TotalMilliseconds)) -or $null -eq $line.Result) { return $null }
+            $message = $null
+            try { $message = $line.Result | ConvertFrom-Json } catch { }
+            if ($message -and $message.id -eq $Id) { return $message }
+            if (-not $message -and $line.Result.Trim()) { $other.Add($line.Result.Trim()) }
+        }
+        return $null
+    }
+    try {
+        $deadline = (Get-Date).AddSeconds(30)
+        $process.StandardInput.WriteLine('{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"kubecon-ctf-image","version":"1.0"}}}')
+        $process.StandardInput.Flush()
+        if (& $readReply 1 $deadline) {
+            $process.StandardInput.WriteLine('{"jsonrpc":"2.0","method":"notifications/initialized"}')
+            $process.StandardInput.WriteLine('{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}')
+            $process.StandardInput.Flush()
+            $list = & $readReply 2 $deadline
+            if ($list) { $tools = @($list.result.tools | ForEach-Object { [string]$_.name }) }
+        }
+    } catch {
+        $other.Add($_.Exception.Message)
+    } finally {
+        try { $process.StandardInput.Close() } catch { }
+        if (-not $process.WaitForExit(5000)) { try { $process.Kill() } catch { }; [void]$process.WaitForExit(5000) }
+        Remove-Item -LiteralPath $profileDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if ($tools.Count -gt 0) {
+        return [pscustomobject]@{ Ok = $true; Detail = "Starts from mcp.json ($($arguments -join ' ')), and lists $($tools.Count) tools for Copilot." }
+    }
+    $errors = @()
+    if ($stderr.Wait(3000)) { $errors = @($stderr.Result -split '\r?\n' | Where-Object { $_.Trim() -and $_ -notmatch 'level=info' }) }
+    $how = if ($process.HasExited) { "exit code $($process.ExitCode)" } else { 'no reply within 30 seconds' }
+    return [pscustomobject]@{ Ok = $false; Detail = "Doesn't start from $mcpPath ($how): $((@($other) + $errors) -join ' ')" }
 }
 
 function Get-AzureCliVersion {
@@ -824,6 +894,7 @@ function Install-VSCode {
 
     # AKS-MCP as a user-level MCP server, so GitHub Copilot's agent mode can use it in any folder. It runs as the
     # attendee, with their own az login and kubeconfig. readwrite lets Copilot apply fixes; the challenges need that.
+    # $AksMcpArgs leaves out cilium and hubble, without which it doesn't start.
     $mcpPath = Join-Path $userDir 'mcp.json'
     $mcp = [ordered]@{ servers = [ordered]@{} }
     if (Test-Path -LiteralPath $mcpPath) {
@@ -838,7 +909,7 @@ function Install-VSCode {
     $mcp.servers['aks-mcp'] = [ordered]@{
         type    = 'stdio'
         command = (Join-Path $K8sDir 'aks-mcp.exe')
-        args    = @('--access-level', 'readwrite', '--timeout', '600')
+        args    = $AksMcpArgs
         env     = [ordered]@{ AKS_MCP_COLLECT_TELEMETRY = 'false' }
     }
     [IO.File]::WriteAllText($mcpPath, (ConvertTo-Json -InputObject $mcp -Depth 10), (New-Object Text.UTF8Encoding($false)))
@@ -1229,6 +1300,8 @@ function Test-Image([switch]$Finalizing) {
     Add-Check 'Visual Studio Code' ((Test-Path $CodeExe) -and $missingExtensions.Count -eq 0 -and [bool]$copilot -and $settingsOk -and $mcpOk) `
         ($(if ($missingExtensions.Count) { "Missing extensions: $($missingExtensions -join ', '). " } else { "Extensions: $($extensions.Count) installed. " }) +
          "Copilot Chat: $(if ($copilot) { $copilot } else { 'missing' }). Lab settings: $settingsOk. AKS-MCP in mcp.json: $mcpOk.")
+    $aksMcpStart = Test-AksMcpServer
+    Add-Check 'AKS-MCP' $aksMcpStart.Ok $aksMcpStart.Detail
 
     $edgePolicy = Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Edge' -ErrorAction SilentlyContinue
     Add-Check 'Microsoft Edge' ($edgePolicy.HideFirstRunExperience -eq 1 -and [bool]$edgePolicy.ManagedFavorites) 'First-run, startup page, and favorites policies'

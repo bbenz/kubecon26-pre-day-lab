@@ -12,8 +12,9 @@
     service principal in its own Azure CLI profile, registers the lab's resource providers, and deploys the BEGIN
     state of the selected challenges with the repository's begin-challenge/azure-cli-powershell/deploy.ps1, the
     same script that attendees run to reset a challenge. Then it gives the cloud portal user its roles, sets up the
-    lab user's Azure CLI for browser sign-in, optionally installs the Inspektor Gadget cluster extension, and runs
-    the readiness checks. deploy.ps1 writes the lab user's kubeconfig (KUBECONFIG points at it).
+    lab user's Azure CLI for browser sign-in, sets the AKS-MCP server's arguments in the lab user's VS Code, for
+    GitHub Copilot, optionally installs the Inspektor Gadget cluster extension, and runs the readiness checks.
+    deploy.ps1 writes the lab user's kubeconfig (KUBECONFIG points at it).
 
     Last, whatever the result, it removes the service principal from the VM, because an attendee gets the VM next:
     it deletes the service principal's Azure CLI profile, and clears the PowerShell event logs, which hold the
@@ -60,6 +61,12 @@ $AzureDir     = if ($Manual) { $LabAzureDir } else { Join-Path $LcaDir 'azure-cl
 $AzPython     = 'C:\Program Files\Microsoft SDKs\Azure\CLI2\python.exe'
 $K8sDir       = 'C:\Program Files\Kubernetes'
 $KubectlExe   = Join-Path $K8sDir 'kubectl.exe'
+$AksMcpExe    = Join-Path $K8sDir 'aks-mcp.exe'
+# The VM image script's arguments for AKS-MCP: keep the two the same. Without --enabled-components, AKS-MCP turns on
+# every component, and doesn't start without the cilium and hubble CLIs, which the lab doesn't use.
+$AksMcpArgs   = '--access-level', 'readwrite', '--timeout', '600', '--enabled-components',
+                'az_cli,monitor,fleet,network,compute,detectors,advisor,inspektorgadget,kubectl,helm'
+$LabMcpPath   = Join-Path $Cfg.LabProfile 'AppData\Roaming\Code\User\mcp.json'
 $StatePath    = Join-Path $LcaDir "state-$($Mode.ToLowerInvariant()).json"
 $Stamp        = Get-Date -Format 'yyyyMMdd-HHmmss'
 $LogPath      = Join-Path $LcaDir "$($Mode.ToLowerInvariant())-$Stamp.log"
@@ -398,6 +405,34 @@ function Set-AttendeeCli {
     return "The lab user's Azure CLI uses browser sign-in and isn't signed in.$removed The attendee runs az login."
 }
 
+function Set-AttendeeMcp {
+    # The VM image configures AKS-MCP in the lab user's VS Code (the user mcp.json), for GitHub Copilot. Images built
+    # before November 5, 2026 start it without --enabled-components, so it stops at once: set the lab's arguments.
+    if (-not (Test-Path -LiteralPath $AksMcpExe)) { throw "$AksMcpExe is missing. Build the VM image with skillable\vm-image\kubecon-ctf-vm-image-setup.ps1." }
+    $mcp = [ordered]@{}
+    $text = if (Test-Path -LiteralPath $LabMcpPath) { Get-Content -LiteralPath $LabMcpPath -Raw } else { '' }
+    if ($text -and $text.Trim()) {
+        try { $mcp = ConvertFrom-Json -InputObject $text -AsHashtable } catch { throw "Can't read ${LabMcpPath}: $($_.Exception.Message)" }
+    }
+    if ($mcp['servers'] -isnot [Collections.IDictionary]) { $mcp['servers'] = [ordered]@{} }
+    $server = $mcp['servers']['aks-mcp']
+    if ($server -isnot [Collections.IDictionary]) { $server = [ordered]@{}; $mcp['servers']['aks-mcp'] = $server }
+    $wanted = $AksMcpArgs -join ' '
+    $vars = $server['env']
+    if ($server['type'] -eq 'stdio' -and $server['command'] -eq $AksMcpExe -and (@($server['args']) -join ' ') -eq $wanted -and
+        $vars -is [Collections.IDictionary] -and $vars['AKS_MCP_COLLECT_TELEMETRY'] -eq 'false') {
+        return "$LabMcpPath already starts aks-mcp with $wanted"
+    }
+    $server['type'] = 'stdio'
+    $server['command'] = $AksMcpExe
+    $server['args'] = $AksMcpArgs
+    if ($vars -isnot [Collections.IDictionary]) { $vars = [ordered]@{}; $server['env'] = $vars }
+    $vars['AKS_MCP_COLLECT_TELEMETRY'] = 'false'
+    New-Item -ItemType Directory -Path (Split-Path -Parent $LabMcpPath) -Force | Out-Null
+    [IO.File]::WriteAllText($LabMcpPath, (ConvertTo-Json -InputObject $mcp -Depth 10), [Text.UTF8Encoding]::new($false))
+    return "Set aks-mcp's arguments in ${LabMcpPath}: $wanted"
+}
+
 function Install-InspektorGadget {
     # The AKS cluster extension (preview) is how Microsoft supports Inspektor Gadget on AKS. A1 offers it as optional
     # evidence. On AKS Automatic, its DaemonSet can't place pods on the AKS-managed hosted system nodes (an AKS policy
@@ -455,6 +490,68 @@ function Invoke-Check([string]$Name, [string]$Severity, [scriptblock]$Test) {
     } catch {
         Add-Check $Name $false $_.Exception.Message $Severity
     }
+}
+
+function Read-McpReply([Diagnostics.Process]$Process, [int]$Id, [datetime]$Deadline, [Collections.Generic.List[string]]$Other) {
+    # Reads the server's output until the JSON-RPC reply with this ID. Other lines, such as AKS-MCP's validation
+    # errors, are kept for the check's detail.
+    while ((Get-Date) -lt $Deadline) {
+        $read = $Process.StandardOutput.ReadLineAsync()
+        if (-not $read.Wait([int][Math]::Max(1, ($Deadline - (Get-Date)).TotalMilliseconds)) -or $null -eq $read.Result) { return $null }
+        $message = $null
+        try { $message = ConvertFrom-Json -InputObject $read.Result } catch { }
+        if ($message -and $message.id -eq $Id) { return $message }
+        if (-not $message -and $read.Result.Trim()) { $Other.Add($read.Result.Trim()) }
+    }
+    return $null
+}
+
+function Test-AksMcpStart {
+    # Starts AKS-MCP the way VS Code does, from the lab user's mcp.json, and asks for its tools over MCP (initialize,
+    # then tools/list). It needs no Azure sign-in to start, so it gets an empty Azure CLI profile and none of the
+    # worker's AZURE_ variables. As SYSTEM, it runs only the image's aks-mcp.exe, never another command in mcp.json.
+    $server = (ConvertFrom-Json -InputObject (Get-Content -LiteralPath $LabMcpPath -Raw) -AsHashtable)['servers']['aks-mcp']
+    if ($server -isnot [Collections.IDictionary]) { return @{ Ok = $false; Detail = "$LabMcpPath has no aks-mcp server" } }
+    if ($server['command'] -ne $AksMcpExe) { return @{ Ok = $false; Detail = "$LabMcpPath starts '$($server['command'])', not $AksMcpExe" } }
+    $arguments = @($server['args'] | ForEach-Object { [string]$_ })
+    $psi = [Diagnostics.ProcessStartInfo]::new($AksMcpExe)
+    foreach ($a in $arguments) { $psi.ArgumentList.Add($a) }
+    $psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
+    $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
+    foreach ($name in @($psi.Environment.Keys | Where-Object { $_ -like 'AZURE_*' })) { [void]$psi.Environment.Remove($name) }
+    if ($server['env'] -is [Collections.IDictionary]) {
+        foreach ($name in $server['env'].Keys) { if ($name -notlike 'AZURE_*') { $psi.Environment[$name] = [string]$server['env'][$name] } }
+    }
+    $profileDir = Join-Path ([IO.Path]::GetTempPath()) "kubecon-ctf-aks-mcp-$PID"
+    $psi.Environment['AZURE_CONFIG_DIR'] = $profileDir
+    $other = [Collections.Generic.List[string]]::new()
+    $tools = @()
+    $process = [Diagnostics.Process]::Start($psi)
+    $stderr = $process.StandardError.ReadToEndAsync()
+    try {
+        $deadline = (Get-Date).AddSeconds(30)
+        $process.StandardInput.WriteLine('{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"kubecon-ctf-lca","version":"1.0"}}}')
+        $process.StandardInput.Flush()
+        if (Read-McpReply $process 1 $deadline $other) {
+            $process.StandardInput.WriteLine('{"jsonrpc":"2.0","method":"notifications/initialized"}')
+            $process.StandardInput.WriteLine('{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}')
+            $process.StandardInput.Flush()
+            $list = Read-McpReply $process 2 $deadline $other
+            if ($list) { $tools = @($list.result.tools | ForEach-Object { [string]$_.name }) }
+        }
+    } catch {
+        $other.Add($_.Exception.Message)
+    } finally {
+        try { $process.StandardInput.Close() } catch { }
+        if (-not $process.WaitForExit(5000)) { try { $process.Kill($true) } catch { }; [void]$process.WaitForExit(5000) }
+        Remove-Item -LiteralPath $profileDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if ($tools.Count -gt 0) {
+        return @{ Ok = $true; Detail = "aks-mcp starts with the lab user's mcp.json ($($arguments -join ' ')), and lists $($tools.Count) tools for Copilot" }
+    }
+    $errors = if ($stderr.Wait(3000)) { @($stderr.Result -split '\r?\n' | Where-Object { $_.Trim() -and $_ -notmatch 'level=info' }) } else { @() }
+    $how = if ($process.HasExited) { "exit code $($process.ExitCode)" } else { 'no reply within 30 seconds' }
+    return @{ Ok = $false; Detail = "aks-mcp doesn't start with the lab user's mcp.json ($how): $(Limit-Text ((@($other) + $errors) -join ' ') 400)" }
 }
 
 function Test-Readiness {
@@ -531,6 +628,7 @@ function Test-Readiness {
         @{ Ok = ($missing.Count -eq 0 -and $azVersion -ge [version]'2.86.0')
            Detail = "Azure CLI $azVersion. $(if ($missing) { "Missing: $($missing -join ', ')" } else { 'All lab tools are present.' })" }
     }
+    Invoke-Check 'AKS-MCP for Copilot' 'WARN' { Test-AksMcpStart }
     Invoke-Check 'Lab folder' 'FAIL' {
         $required = @('begin-challenge\azure-cli-powershell\deploy.ps1', 'scoring\verify.ps1', 'shared\azure-cli-powershell\CtfLab.psm1',
                       ".lab\rendered\$RG") + @($Selected | ForEach-Object { "begin-challenge\challenges\$_-*\README.md" })
@@ -623,6 +721,7 @@ try {
     Invoke-Step 'Begin state (deploy.ps1)' { Invoke-BeginState }
     Invoke-Step 'Portal user access' { Grant-PortalUser } -Optional
     Invoke-Step 'Attendee Azure CLI' { Set-AttendeeCli } -Optional
+    Invoke-Step 'AKS-MCP for Copilot' { Set-AttendeeMcp } -Optional
     if ($Cfg.InspektorGadget) { Invoke-Step 'Inspektor Gadget' { Install-InspektorGadget } -Optional }
     $failures = Test-Readiness
     if (Test-RemoveCredentials) { $failures += Remove-CloudCredential }
