@@ -48,11 +48,15 @@ Your proctor tells you which challenge each round uses. C1 to C4 are the core ch
 
 # Get started
 
-**Estimated time:** 5 minutes
+**Estimated time:** 10 minutes
 
 Confirm that you can reach your environment. If any step on this page fails, ask a proctor right away. They can move you to a spare environment.
 
-## Task 1: Sign in to the Azure portal
+## Task 1: Sign in to the lab VM, the Azure portal, Microsoft Edge, and other lab VM resources
+
+All of your lab's passwords and IDs are on the **Resources** tab, above these instructions.
+
+1. [] Sign in to the lab VM. On the Windows sign-in screen, select the password box. Then select +++Passw0rd!+++ to type the password, and press **Enter**. If the VM already shows the Windows desktop, you're signed in: go to the next step.
 
 1. [] **Microsoft Edge** opens the Azure portal when the lab VM starts. If it isn't open, open Edge, and go to +++https://portal.azure.com+++. Sign in with the following credentials:
 
@@ -61,21 +65,47 @@ Confirm that you can reach your environment. If any step on this page fails, ask
 
     Leave this tab open. Some challenges use the Azure portal.
 
+1. [] While you sign in, Windows and Edge offer to keep you signed in. Accept each offer, so that you're asked to sign in less often in the rest of the lab:
+
+    - When you're asked **Stay signed in?**, select **Yes**.
+    - When you're asked to sign in to Microsoft Edge, select **Sign in**, and enter your Temporary Access Pass again if you're asked to. When you see **Account added to this device**, select **Done**.
+    - When you're asked whether to sign in automatically to all desktop apps and websites on this device, select **Yes, all apps**.
+
 ## Task 2: Open the lab folder and a terminal
 
 1. [] **Visual Studio Code** opens the lab repository, **kubecon26-pre-day-lab**, when the lab VM starts. If it isn't open, open Visual Studio Code from the taskbar or the Start menu, select **File** > **Open Folder**, enter +++C:\LabFiles\kubecon26-pre-day-lab+++, and open the folder.
 
 1. [] Select **Terminal** > **New Terminal**. The terminal runs PowerShell 7. Unless a step says otherwise, run every command in this lab from this terminal.
 
-## Task 3: Sign in to the Azure CLI
+## Task 3: Sign in to the Azure CLI and GitHub Copilot
 
-1. [] Run the following command:
+1. [] Check whether the Azure CLI is already signed in:
+
+    +++az account show+++
+
+    If the output shows your lab account, **@lab.CloudPortalCredential(User1).Username**, under `user`, you're signed in: skip the next step. If it says `Please run 'az login' to setup account`, or shows another account, go on to the next step.
+
+1. [] If you're not signed in, run the following command:
 
     +++az login+++
 
     A browser tab opens. Select your lab account, **@lab.CloudPortalCredential(User1).Username**, which you already signed in with in Task 1. If you're asked to sign in again, use the same Temporary Access Pass, +++@lab.CloudPortalCredential(User1).AccessToken+++. When the tab says that you're signed in, return to Visual Studio Code.
 
     > [!Note] `kubectl`, the lab repository's scripts, and the AKS-MCP server all use this sign-in. AKS Automatic clusters use Microsoft Entra ID for authentication and Azure RBAC for authorization, so you reach your cluster as your own lab account.
+
+1. [] Set up single sign-on to GitHub for this lab. In Microsoft Edge, open a new tab (**Ctrl+T**), and go to +++https://github.com/enterprises/skillable-events/sso+++.
+
+    The page says **Single sign-on to Skillable Events**: *Authenticate your account by logging into Skillable Events's single sign-on provider.* Select **Continue**. Edge then shows the Skillable Events enterprise on GitHub, `github.com/enterprises/skillable-events`. If you're asked to sign in with your lab account, use the same username and Temporary Access Pass as in Task 1.
+
+1. [] In Visual Studio Code, select the blue **Sign In** button at the top right, and then select **Continue with GitHub**. Edge opens GitHub. On each page that it shows:
+
+    - **Authorize Visual Studio Code**, which says *From the options below, choose which account you would like to use to authorize this app*: select the green **Continue** button.
+    - The next **Authorize Visual Studio Code** page: scroll down if you need to, and select the green **Authorize Visual Studio Code** button at the bottom.
+    - **This site is trying to open Visual Studio Code**: select **Open**.
+
+    Visual Studio Code opens, and the **Sign In** button is gone: you're signed in to GitHub Copilot, and you have access to its models.
+
+1. [] Open the Chat view (**Ctrl+Alt+I**) if it isn't open, and select **Auto** at the bottom of the chat window to see the list of models that you can choose from. **Auto** chooses a model for you, so you can keep it.
 
 ## Task 4: Connect to your cluster
 
@@ -105,13 +135,13 @@ Confirm that you can reach your environment. If any step on this page fails, ask
 
 ## Task 5: Set up GitHub Copilot
 
-GitHub Copilot is optional, but some challenges suggest an AI assistant. Use your own GitHub account: the Copilot Free plan is enough. You stay signed in only in this lab VM, which is deleted when the lab ends.
+GitHub Copilot is optional, but some challenges suggest an AI assistant. You signed in to it in Task 3. You stay signed in only in this lab VM, which is deleted when the lab ends.
 
-1. [] In Visual Studio Code, open the Chat view (**Ctrl+Alt+I**), and sign in with your GitHub account when you're asked to.
+1. [] In Visual Studio Code, open the Chat view (**Ctrl+Alt+I**). If the blue **Sign In** button is still at the top right, sign in as in Task 3.
 
 1. [] In the Chat view, select **Agent** mode, and then select the **Configure Tools** icon. The **aks-mcp** server is listed: it gives Copilot tools for your cluster. The first time it starts, VS Code asks you to trust it: select **Trust**.
 
-    > [!Note] If your Copilot seat comes from an organization or enterprise (Copilot Business or Enterprise), its **MCP servers in Copilot** policy must be on for Copilot to use AKS-MCP. A personal account with Copilot Free works.
+    > [!Note] If **aks-mcp** isn't listed, or Copilot can't use its tools, ask a proctor. You can complete every challenge without Copilot.
 
 ===
 
